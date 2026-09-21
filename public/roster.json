@@ -1,0 +1,316 @@
+{
+  "brand": "Paranormal Tours",
+  "product": "Codex Ignota",
+  "agents": [
+    {
+      "name": "Bud",
+      "displayName": "Bud \u2014 Business Development Strategist",
+      "role": "Business Development Strategist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646484"
+    },
+    {
+      "name": "Dex",
+      "displayName": "Dex \u2014 Data Analyst",
+      "role": "Data Analyst",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646525"
+    },
+    {
+      "name": "Carrie",
+      "displayName": "Carrie \u2014 Customer Support Specialist",
+      "role": "Customer Support Specialist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646531"
+    },
+    {
+      "name": "Eric",
+      "displayName": "Eric \u2014 eCommerce Manager",
+      "role": "eCommerce Manager",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646540"
+    },
+    {
+      "name": "Tara",
+      "displayName": "Tara",
+      "role": "Personal Development and Productivity Coach",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646543"
+    },
+    {
+      "name": "Sally",
+      "displayName": "Sally \u2014 Social Media Manager",
+      "role": "Social Media Manager",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646639"
+    },
+    {
+      "name": "Mika",
+      "displayName": "Mika \u2014 SEO Specialist",
+      "role": "SEO Specialist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646645"
+    },
+    {
+      "name": "Penny",
+      "displayName": "Penny \u2014 Copywriter",
+      "role": "Copywriter",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646647"
+    },
+    {
+      "name": "Em",
+      "displayName": "Em \u2014 Email Marketing Specialist",
+      "role": "Email Marketing Specialist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646651"
+    },
+    {
+      "name": "Milly",
+      "displayName": "Milly \u2014 Sales Strategist",
+      "role": "Sales Strategist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646653"
+    },
+    {
+      "name": "Kezza",
+      "displayName": "Kezza",
+      "role": "Virtual Assistant and Operations Organiser",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646658"
+    },
+    {
+      "name": "Craig",
+      "displayName": "Craig \u2014 Recruitment and Hiring Specialist",
+      "role": "Recruitment and Hiring Specialist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646659"
+    },
+    {
+      "name": "Kelvin",
+      "displayName": "Kelvin",
+      "role": "Partnerships and BizDev Outreach Operator",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646660"
+    },
+    {
+      "name": "Verity",
+      "displayName": "Verity",
+      "role": "Credibility, Verification and Moderation Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646730"
+    },
+    {
+      "name": "Tribe",
+      "displayName": "Tribe \u2014 Community and Membership Growth Agent",
+      "role": "Community and Membership Growth Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646731"
+    },
+    {
+      "name": "Luke",
+      "displayName": "Luke \u2014 Product Sourcing and Supplier QA Agent",
+      "role": "Product Sourcing and Supplier QA Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646736"
+    },
+    {
+      "name": "Tracky",
+      "displayName": "Tracky",
+      "role": "Analytics Instrumentation and Tracking Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646743"
+    },
+    {
+      "name": "Polly",
+      "displayName": "Polly",
+      "role": "Legal, Policy and Compliance Drafting Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646757"
+    },
+    {
+      "name": "Ed",
+      "displayName": "Ed \u2014 Content Research and Editorial Desk Agent",
+      "role": "Content Research and Editorial Desk Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646759"
+    },
+    {
+      "name": "Flo",
+      "displayName": "Flo \u2014 Product and UX Architect",
+      "role": "Product and UX Architect",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646766"
+    },
+    {
+      "name": "Carol",
+      "displayName": "Carol \u2014 PR and Media Outreach Agent",
+      "role": "PR and Media Outreach Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646767"
+    },
+    {
+      "name": "Billy",
+      "displayName": "Billy \u2014 Website Builder",
+      "role": "Website Builder",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646772"
+    },
+    {
+      "name": "Sid",
+      "displayName": "Sid",
+      "role": "Infrastructure, Security and Server Operations Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646774"
+    },
+    {
+      "name": "Raven",
+      "displayName": "Raven",
+      "role": "AI Content Repurposing and Distribution Operator",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646785"
+    },
+    {
+      "name": "Atlas",
+      "displayName": "Atlas \u2014 Knowledgebase and Taxonomy Architect",
+      "role": "Knowledgebase and Taxonomy Architect",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Platform & Codex",
+      "externalId": "4646790"
+    },
+    {
+      "name": "Echo",
+      "displayName": "Echo \u2014 YouTube and Video Growth Strategist",
+      "role": "YouTube and Video Growth Strategist",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646794"
+    },
+    {
+      "name": "Nyx",
+      "displayName": "Nyx",
+      "role": "Paranormal Intelligence and Trend Monitoring Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646795"
+    },
+    {
+      "name": "Forge",
+      "displayName": "Forge",
+      "role": "Brand Identity and Creative Direction Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Content & Audience",
+      "externalId": "4646802"
+    },
+    {
+      "name": "Oracle",
+      "displayName": "Oracle",
+      "role": "Sponsorship and Commercial Partnerships Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Growth & Revenue",
+      "externalId": "4646808"
+    },
+    {
+      "name": "Sentinel",
+      "displayName": "Sentinel",
+      "role": "Reputation and Crisis Monitoring Agent",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646812"
+    },
+    {
+      "name": "Spectre",
+      "displayName": "Spectre \u2014 AI Automation and Workflow Engineer",
+      "role": "AI Automation and Workflow Engineer",
+      "status": "idle",
+      "currentTask": null,
+      "lastUpdate": null,
+      "squad": "Ops & Trust",
+      "externalId": "4646814"
+    }
+  ]
+}
