@@ -1,52 +1,24 @@
 # Paranormal Tours — Agent Ops Dashboard
 
-Local founder dashboard for Paranormal Tours / Codex Ignota specialist agents.
-Assign tasks, track status, organise the work board, and review a mock Codex
-validation queue. All task and status changes persist in `localStorage`
-(no backend required for v1).
+**Live:** [https://paranormal-tours-ops-dashboard.vercel.app/](https://paranormal-tours-ops-dashboard.vercel.app/)
 
-## Stack
+Phone-friendly ops dashboard for the 31 Paranormal Tours specialist agents (Codex Ignota queue, task board, activity).
 
-- Next.js 14 (App Router)
-- TypeScript
-- Tailwind CSS
-
-## Run locally
+## Local development
 
 ```bash
-cd /workspace/pt-agent-ops-dashboard
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open http://localhost:3000
 
-Production build:
+## Deploy
 
-```bash
-npm run build
-npm start
-```
-
-## Pages
-
-| Route | Purpose |
-| --- | --- |
-| `/` | Overview — KPIs, squad cards, activity feed |
-| `/agents` | Searchable / filterable grid of all 31 agents |
-| `/agents/[slug]` | Agent detail, assign task, briefing notes |
-| `/board` | Kanban: Backlog → In progress → Review → Done |
-| `/codex` | Mock Codex Ignota validation queue |
-
-## Data
-
-- Seed roster: `public/roster.json` (copied from `pt-dashboard-roster.json`)
-- Client state key: `pt-agent-ops-v1` in `localStorage`
-- Use **Reset demo data** on the overview page to restore seed tasks
+Hosted on Vercel from [`amarsay/paranormal-tours-ops-dashboard`](https://github.com/amarsay/paranormal-tours-ops-dashboard). Pushes to `main` redeploy automatically if the Vercel GitHub integration is connected.
 
 ## Notes
 
-- British English UI copy throughout.
-- Live Grok Bot messaging is a future integration — the “Ask agent” form
-  stores a local briefing note only.
-- Optional `externalId` can be added to agents when Grok Bot IDs are available.
+- Task/status changes persist in browser `localStorage` (demo mode)
+- Live Grok Bot messaging is a future integration
+- British English UI copy
