@@ -29,15 +29,29 @@ function getMemory(): MemoryBucket {
   return globalThis.__ptAgentOpsMemory;
 }
 
-function redisConfigured(): boolean {
-  return Boolean(
-    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+function redisUrl(): string | undefined {
+  return (
+    process.env.UPSTASH_REDIS_REST_URL ||
+    process.env.KV_REST_API_URL ||
+    undefined
   );
 }
 
+function redisToken(): string | undefined {
+  return (
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    process.env.KV_REST_API_TOKEN ||
+    undefined
+  );
+}
+
+function redisConfigured(): boolean {
+  return Boolean(redisUrl() && redisToken());
+}
+
 async function redisCommand(args: unknown[]): Promise<unknown> {
-  const url = process.env.UPSTASH_REDIS_REST_URL!;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN!;
+  const url = redisUrl()!;
+  const token = redisToken()!;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -73,6 +87,12 @@ export async function getSnapshot(): Promise<AgentOpsSnapshot> {
           storage: "redis",
         };
       }
+      return {
+        schemaVersion: LIVE_SCHEMA_VERSION,
+        updatedAt: new Date().toISOString(),
+        agents: {},
+        storage: "redis",
+      };
     } catch (err) {
       console.error("[agent-ops] redis get failed, falling back to memory", err);
     }
