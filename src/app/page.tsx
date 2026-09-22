@@ -1,7 +1,7 @@
-import { ActivityFeed } from "@/components/ActivityFeed";
+import { AttentionStrip } from "@/components/AttentionStrip";
 import { KpiStrip } from "@/components/KpiStrip";
+import { OverviewAgents } from "@/components/OverviewAgents";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
-import { SquadCards } from "@/components/SquadCards";
 
 export default function OverviewPage() {
   return (
@@ -15,27 +15,16 @@ export default function OverviewPage() {
             Agent operations overview
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-ink-300">
-            Track specialist teammates across Growth, Platform, Ops and Content.
-            Assign work, organise the board, and keep Codex Ignota moving —
-            all persisted locally for demos.
+            Live presence from Spectre heartbeats. Unblock and review work that
+            needs you — status refreshes every few seconds.
           </p>
         </div>
         <ResetDemoButton />
       </div>
 
       <KpiStrip />
-
-      <div className="grid gap-6 lg:grid-cols-5">
-        <div className="space-y-4 lg:col-span-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wider text-ink-400">
-            Squads
-          </h2>
-          <SquadCards />
-        </div>
-        <div className="lg:col-span-2">
-          <ActivityFeed />
-        </div>
-      </div>
+      <AttentionStrip />
+      <OverviewAgents />
     </div>
   );
 }

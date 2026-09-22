@@ -5,10 +5,11 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useOps } from "@/lib/store";
 import { SQUADS } from "@/lib/seed";
-import type { AgentStatus } from "@/types";
-import { AgentStatusChip } from "./StatusChip";
+import type { PresenceStatus } from "@/types";
+import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
+import { AgentStatusChip, LiveDot } from "./StatusChip";
 
-const STATUSES: AgentStatus[] = ["idle", "working", "blocked", "review"];
+const STATUSES: PresenceStatus[] = ["idle", "working", "blocked", "review", "done", "failed", "stale", "offline"];
 
 export function AgentsGrid() {
   const { agents, hydrated } = useOps();
@@ -22,7 +23,7 @@ export function AgentsGrid() {
     const q = query.trim().toLowerCase();
     return agents.filter((a) => {
       if (squad !== "all" && a.squad !== squad) return false;
-      if (status !== "all" && a.status !== status) return false;
+      if (status !== "all" && derivePresence(a) !== status) return false;
       if (!q) return true;
       return (
         a.name.toLowerCase().includes(q) ||
@@ -85,18 +86,24 @@ export function AgentsGrid() {
           >
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h3 className="font-semibold text-ink-50 group-hover:text-violet-100">
-                  {agent.name}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-ink-50 group-hover:text-violet-100">
+                    {agent.name}
+                  </h3>
+                  <LiveDot live={isLiveDot(agent)} />
+                </div>
                 <p className="text-xs text-ink-400">{agent.role}</p>
               </div>
-              <AgentStatusChip status={agent.status} />
+              <AgentStatusChip status={derivePresence(agent)} />
             </div>
             <p className="mt-3 text-xs uppercase tracking-wider text-ink-500">
               {agent.squad}
             </p>
             <p className="mt-1 line-clamp-2 text-sm text-ink-300">
               {agent.currentTask ?? "No current task"}
+            </p>
+            <p className="mt-2 text-xs text-ink-500">
+              {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
             </p>
           </Link>
         ))}

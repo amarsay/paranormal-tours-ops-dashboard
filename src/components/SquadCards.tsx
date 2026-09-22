@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useOps } from "@/lib/store";
 import { SQUADS } from "@/lib/seed";
+import { derivePresence } from "@/lib/freshness";
 import { AgentStatusChip } from "./StatusChip";
 
 export function SquadCards() {
@@ -12,7 +13,7 @@ export function SquadCards() {
     <div className="grid gap-4 md:grid-cols-2">
       {SQUADS.map((squad) => {
         const members = agents.filter((a) => a.squad === squad);
-        const working = members.filter((a) => a.status === "working").length;
+        const working = members.filter((a) => derivePresence(a) === "working").length;
         return (
           <div key={squad} className="card p-4">
             <div className="mb-3 flex items-start justify-between gap-2">
@@ -44,7 +45,7 @@ export function SquadCards() {
                       {agent.role}
                     </span>
                   </Link>
-                  <AgentStatusChip status={agent.status} />
+                  <AgentStatusChip status={derivePresence(agent)} />
                 </li>
               ))}
               {members.length > 5 && (

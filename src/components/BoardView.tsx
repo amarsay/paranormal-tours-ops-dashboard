@@ -7,8 +7,10 @@ import type { TaskStatus } from "@/types";
 const COLUMNS: { id: TaskStatus; title: string }[] = [
   { id: "backlog", title: "Backlog" },
   { id: "in_progress", title: "In progress" },
+  { id: "blocked", title: "Blocked" },
   { id: "review", title: "Review" },
   { id: "done", title: "Done" },
+  { id: "failed", title: "Failed" },
 ];
 
 export function BoardView() {
@@ -19,11 +21,11 @@ export function BoardView() {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {COLUMNS.map((col) => {
         const cards = tasks.filter((t) => t.status === col.id);
         return (
-          <div key={col.id} className="card flex min-h-[320px] flex-col p-3">
+          <div key={col.id} className="card flex min-h-[280px] flex-col p-3">
             <div className="mb-3 flex items-center justify-between px-1">
               <h2 className="text-sm font-semibold text-ink-100">{col.title}</h2>
               <span className="rounded-full bg-white/5 px-2 py-0.5 text-xs text-ink-400">

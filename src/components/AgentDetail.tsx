@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { formatRelative, useOps } from "@/lib/store";
+import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
 import type { AgentStatus } from "@/types";
-import { AgentStatusChip, TaskStatusChip } from "./StatusChip";
+import { AgentStatusChip, LiveDot, TaskStatusChip } from "./StatusChip";
 
 export function AgentDetail({ slug }: { slug: string }) {
   const {
@@ -72,9 +73,12 @@ export function AgentDetail({ slug }: { slug: string }) {
           </p>
         </div>
         <div className="flex flex-col items-end gap-2">
-          <AgentStatusChip status={agent.status} />
+          <div className="flex items-center gap-2">
+            <LiveDot live={isLiveDot(agent)} />
+            <AgentStatusChip status={derivePresence(agent)} />
+          </div>
           <p className="text-xs text-ink-500">
-            Updated {formatRelative(agent.lastUpdate)}
+            {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
           </p>
         </div>
       </div>

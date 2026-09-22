@@ -10,8 +10,10 @@ import React, {
 } from "react";
 import type {
   ActivityItem,
+  Agent,
   AgentStatus,
   CodexStatus,
+  LiveSyncState,
   OpsState,
   RosterSeed,
   Task,
@@ -24,6 +26,8 @@ import {
   seedCodex,
   seedDemoTasks,
 } from "./seed";
+import type { AgentOpsSnapshot } from "./live-types";
+import { normaliseTaskState } from "./live-types";
 
 interface OpsContextValue extends OpsState {
   assignTask: (agentId: string, title: string, notes?: string) => void;
@@ -32,7 +36,19 @@ interface OpsContextValue extends OpsState {
   addAgentNote: (agentId: string, note: string) => void;
   updateCodexStatus: (entryId: string, status: CodexStatus) => void;
   resetDemo: () => void;
+  applyLiveSnapshot: (snap: AgentOpsSnapshot) => void;
+  setLiveSync: (patch: Partial<LiveSyncState>) => void;
 }
+
+const DEFAULT_LIVE: LiveSyncState = {
+  mode: "idle",
+  lastFetchAt: null,
+  storage: null,
+  error: null,
+  schemaVersion: null,
+};
+
+const POLL_MS = 5000;
 
 const OpsContext = createContext<OpsContextValue | null>(null);
 
@@ -79,6 +95,7 @@ function buildInitial(roster: RosterSeed): Omit<OpsState, "hydrated"> {
     tasks,
     activity,
     codex: seedCodex(),
+    liveSync: { ...DEFAULT_LIVE },
   };
 }
 
@@ -100,7 +117,11 @@ export function OpsProvider({
       if (raw) {
         const parsed = JSON.parse(raw) as Omit<OpsState, "hydrated">;
         if (parsed.agents?.length === 31) {
-          setState({ ...parsed, hydrated: true });
+          setState({
+            ...parsed,
+            liveSync: { ...DEFAULT_LIVE },
+            hydrated: true,
+          });
           return;
         }
       }
@@ -119,7 +140,174 @@ export function OpsProvider({
       codex: state.codex,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
-  }, [state]);
+  }, [state.hydrated, state.agents, state.tasks, state.activity, state.codex]);
+
+  const applyLiveSnapshot = useCallback((snap: AgentOpsSnapshot) => {
+    setState((prev) => {
+      const rows = Object.values(snap.agents || {});
+      if (rows.length === 0) {
+        return {
+          ...prev,
+          liveSync: {
+            ...prev.liveSync,
+            mode: "live",
+            lastFetchAt: new Date().toISOString(),
+            storage: snap.storage,
+            error: null,
+            schemaVersion: snap.schemaVersion,
+          },
+        };
+      }
+
+      const byId = new Map(rows.map((r) => [r.agentId, r]));
+      const agents: Agent[] = prev.agents.map((a) => {
+        const row = byId.get(a.id);
+        if (!row) return a;
+        const taskState = normaliseTaskState(row.taskState);
+        return {
+          ...a,
+          status: row.status,
+          presence: (row.presence as Agent["presence"]) || row.status,
+          currentTask: row.taskTitle,
+          lastUpdate: row.updatedAt,
+          heartbeatAt: row.heartbeatAt || row.updatedAt,
+          blockerReason: row.blockerReason ?? null,
+          correlationId: row.correlationId ?? null,
+          handoffTo: row.handoffTo ?? null,
+          taskId: row.taskId ?? null,
+          taskState: taskState,
+          notes:
+            row.notes && !a.notes.includes(row.notes)
+              ? [row.notes, ...a.notes].slice(0, 40)
+              : a.notes,
+          live: true,
+        };
+      });
+
+      let tasks = prev.tasks;
+      for (const row of rows) {
+        const taskState = normaliseTaskState(row.taskState);
+        if (!taskState) continue;
+        if (row.taskId) {
+          const idx = tasks.findIndex((t) => t.id === row.taskId);
+          if (idx >= 0) {
+            tasks = tasks.map((t) =>
+              t.id === row.taskId
+                ? {
+                    ...t,
+                    status: taskState,
+                    title: row.taskTitle || t.title,
+                    updatedAt: row.updatedAt,
+                  }
+                : t
+            );
+            continue;
+          }
+        }
+        if (row.taskTitle) {
+          const match = tasks.find(
+            (t) =>
+              t.agentId === row.agentId &&
+              t.title === row.taskTitle &&
+              t.status !== "done"
+          );
+          if (match) {
+            tasks = tasks.map((t) =>
+              t.id === match.id
+                ? { ...t, status: taskState, updatedAt: row.updatedAt }
+                : t
+            );
+          } else if (
+            taskState === "in_progress" ||
+            taskState === "blocked" ||
+            taskState === "review"
+          ) {
+            const now = row.updatedAt;
+            tasks = [
+              {
+                id: row.taskId || `live-${row.agentId}-${now}`,
+                title: row.taskTitle,
+                agentName: row.agentName,
+                agentId: row.agentId,
+                status: taskState,
+                notes: row.blockerReason || "",
+                updatedAt: now,
+                createdAt: now,
+              },
+              ...tasks,
+            ];
+          }
+        }
+      }
+
+      return {
+        ...prev,
+        agents,
+        tasks,
+        liveSync: {
+          mode: "live",
+          lastFetchAt: new Date().toISOString(),
+          storage: snap.storage,
+          error: null,
+          schemaVersion: snap.schemaVersion,
+        },
+      };
+    });
+  }, []);
+
+  const setLiveSync = useCallback((patch: Partial<LiveSyncState>) => {
+    setState((prev) => ({
+      ...prev,
+      liveSync: { ...prev.liveSync, ...patch },
+    }));
+  }, []);
+
+  // Poll shared live snapshot every 5s (and once immediately after hydrate)
+  useEffect(() => {
+    if (!state.hydrated) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    async function poll() {
+      if (cancelled) return;
+      setState((prev) => ({
+        ...prev,
+        liveSync: {
+          ...prev.liveSync,
+          mode: prev.liveSync.mode === "live" ? "live" : "polling",
+        },
+      }));
+      try {
+        const res = await fetch("/api/agent-ops/status", {
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const snap = (await res.json()) as AgentOpsSnapshot;
+        if (!cancelled) applyLiveSnapshot(snap);
+      } catch (err) {
+        if (!cancelled) {
+          setState((prev) => ({
+            ...prev,
+            liveSync: {
+              ...prev.liveSync,
+              mode: "offline",
+              error: err instanceof Error ? err.message : "Fetch failed",
+            },
+          }));
+        }
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(poll, POLL_MS);
+        }
+      }
+    }
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [state.hydrated, applyLiveSnapshot]);
 
   const assignTask = useCallback((agentId: string, title: string, notes = "") => {
     const trimmed = title.trim();
@@ -175,6 +363,10 @@ export function OpsProvider({
       if (status === "done") {
         agentStatus = "idle";
         currentTask = null;
+      } else if (status === "failed") {
+        agentStatus = "blocked";
+      } else if (status === "blocked") {
+        agentStatus = "blocked";
       } else if (status === "review") {
         agentStatus = "review";
       } else if (status === "backlog") {
@@ -310,6 +502,8 @@ export function OpsProvider({
       addAgentNote,
       updateCodexStatus,
       resetDemo,
+      applyLiveSnapshot,
+      setLiveSync,
     }),
     [
       state,
@@ -319,6 +513,8 @@ export function OpsProvider({
       addAgentNote,
       updateCodexStatus,
       resetDemo,
+      applyLiveSnapshot,
+      setLiveSync,
     ]
   );
 
