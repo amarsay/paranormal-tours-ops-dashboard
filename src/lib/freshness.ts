@@ -5,6 +5,15 @@ function isActiveStatus(status: AgentStatus): boolean {
   return status === "working" || status === "blocked" || status === "review";
 }
 
+function isWriteChip(status: AgentStatus): boolean {
+  return (
+    status === "idle" ||
+    status === "working" ||
+    status === "blocked" ||
+    status === "review"
+  );
+}
+
 /** Pick best timestamp for freshness (heartbeat preferred). */
 export function agentBeatAt(agent: Agent): number | null {
   const iso = agent.heartbeatAt || agent.lastUpdate;
@@ -15,17 +24,11 @@ export function agentBeatAt(agent: Agent): number | null {
 
 /**
  * Derive display presence from primary status + heartbeat age.
- * done/failed from presence/taskState when set; stale/offline from age.
+ * Agent chips key off write status (idle|working|blocked|review).
+ * done/failed live on taskState; stale/offline from heartbeat age.
+ * Brief done/failed pulse only when presence is explicitly set and status is idle.
  */
 export function derivePresence(agent: Agent, now = Date.now()): PresenceStatus {
-  const raw = (agent.presence as PresenceStatus | undefined) || agent.status;
-  if (raw === "failed") return "failed";
-  if (raw === "done") {
-    const beat = agentBeatAt(agent);
-    if (beat != null && now - beat < FRESHNESS.donePulseMs) return "done";
-    return "idle";
-  }
-
   const beat = agentBeatAt(agent);
   if (beat == null) {
     // Never checked in via live → offline only when we expect live overlay
@@ -36,6 +39,16 @@ export function derivePresence(agent: Agent, now = Date.now()): PresenceStatus {
   const active = isActiveStatus(agent.status);
   const staleLimit = active ? FRESHNESS.staleActiveMs : FRESHNESS.staleIdleMs;
   if (age > staleLimit) return "stale";
+
+  // When status is a write chip, chips follow status (blocked/review still surface).
+  if (isWriteChip(agent.status)) {
+    if (agent.status === "idle") {
+      const raw = agent.presence as PresenceStatus | undefined;
+      if (raw === "failed") return "failed";
+      if (raw === "done" && age < FRESHNESS.donePulseMs) return "done";
+    }
+    return agent.status;
+  }
 
   return agent.status;
 }

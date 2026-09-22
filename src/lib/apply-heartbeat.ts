@@ -37,15 +37,23 @@ export async function applyHeartbeat(
         ? body.currentTask
         : null;
 
-  // Preserve done/failed in presence field for client derivation
+  // Agent chips key off write status (idle|working|blocked|review).
+  // Keep done/failed on taskState; only honor explicit presence overlays
+  // (stale/offline) or explicit done/failed when the write status is idle.
   let presence: string | undefined;
   const p = String(presenceRaw ?? "").toLowerCase();
-  if (p === "done" || p === "failed" || p === "stale" || p === "offline") {
+  if (p === "stale" || p === "offline") {
     presence = p;
-  } else if (taskState === "done") {
-    presence = "done";
-  } else if (taskState === "failed") {
-    presence = "failed";
+  } else if (
+    (p === "done" || p === "failed") &&
+    status !== "working" &&
+    status !== "blocked" &&
+    status !== "review"
+  ) {
+    // Explicit done/failed presence with idle write status (brief pulse).
+    // Do NOT promote taskState done/failed into presence — that made Idle
+    // agents show as Done whenever taskState stayed done across heartbeats.
+    presence = p;
   }
 
   const row: AgentOpsRow = {

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useOps } from "@/lib/store";
@@ -48,10 +49,15 @@ export function Nav() {
     <header className="sticky top-0 z-40 border-b border-white/5 bg-ink/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
         <Link href="/" className="group flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500/40 to-teal-500/30 ring-1 ring-violet-400/30 shadow-[0_0_24px_rgba(139,92,246,0.25)]">
-            <span className="text-sm font-semibold tracking-tight text-violet-100">
-              PT
-            </span>
+          <span className="relative flex h-9 w-9 shrink-0 overflow-hidden rounded-lg ring-1 ring-violet-400/30 shadow-[0_0_24px_rgba(139,92,246,0.25)]">
+            <Image
+              src="/paranormal-tours-logo.webp"
+              alt="Paranormal Tours"
+              width={72}
+              height={72}
+              className="h-9 w-9 object-cover"
+              priority
+            />
           </span>
           <div className="leading-tight">
             <p className="text-sm font-semibold tracking-wide text-ink-50">
