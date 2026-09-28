@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import type { ContentPackage, ContentStatus, QaCheck, ReviewActionRequest } from "@/lib/content-review-types";
-import { PLATFORM_LABELS } from "@/lib/content-review-types";
+import {
+  KNOWN_VISUAL_PROVIDERS,
+  KNOWN_VOICE_PROVIDERS,
+  PLATFORM_LABELS,
+} from "@/lib/content-review-types";
 import {
   PENDING_LABEL,
   formatGbp,
@@ -13,6 +17,7 @@ import {
   platformStatus,
   platformsHeld,
   platformsHeldTitle,
+  platformsHeldRelease,
   platformsAwaitingManual,
   toneConfirmedForCurrent,
   youtubeTitleOptions,
@@ -23,8 +28,11 @@ import {
   ContentStatusChip,
   CredibilityChip,
   ExampleTag,
+  HOLD_REASON_LABELS,
   PendingChip,
+  PromoChip,
   QaFlaggedChip,
+  UnknownProviderChip,
   SensitiveBadge,
 } from "./ContentStatusChip";
 import { PlatformTabs } from "./PlatformTabs";
@@ -61,16 +69,21 @@ function VideoPreview({ pkg }: { pkg: ContentPackage }) {
       role="img"
       aria-label="No video preview available"
     >
-      {v?.poster && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={v.poster} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40" />
+      {v?.poster ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={v.poster} alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" />
+          <div className="absolute inset-x-0 bottom-0 bg-ink-950/85 px-3 py-2 text-center">
+            <p className="text-xs font-medium text-ink-200">No preview in mock</p>
+            <p className="mt-0.5 text-[11px] text-ink-500">Poster only — the render URL arrives with the real package.</p>
+          </div>
+        </>
+      ) : (
+        <div className="relative px-4 text-center">
+          <p className="text-sm font-medium text-ink-200">No preview in mock</p>
+          <p className="mt-1 text-xs text-ink-500">No render attached yet.</p>
+        </div>
       )}
-      <div className="relative px-4 text-center">
-        <p className="text-sm font-medium text-ink-200">No preview in mock</p>
-        <p className="mt-1 text-xs text-ink-500">
-          {v?.poster ? "Poster only — the render URL arrives with the real package." : "No render attached yet."}
-        </p>
-      </div>
     </div>
   );
 }
@@ -120,7 +133,7 @@ function PlatformStatusStrip({ pkg }: { pkg: ContentPackage }) {
         {pkg.platforms.map((p) => (
           <li key={p.platform} className="inline-flex items-center gap-1.5 text-xs text-ink-300">
             {PLATFORM_LABELS[p.platform]}
-            <ContentStatusChip status={platformStatus(pkg, p)} at={p.postedAt} />
+            <ContentStatusChip status={platformStatus(pkg, p)} at={p.postedAt} holdReason={p.holdReason} />
           </li>
         ))}
       </ul>
@@ -213,6 +226,100 @@ function HeldBanner({
   );
 }
 
+const PROVIDER_LABELS: Record<string, string> = {
+  elevenlabs: "ElevenLabs",
+  xai_voice: "xAI voice",
+  xai_grok: "xAI Grok",
+};
+
+/** Read-only meta line: voice / visual provider and Codex link. */
+function ProviderMeta({ pkg }: { pkg: ContentPackage }) {
+  const { voiceProvider, visualProvider, codexUrl } = pkg;
+  if (!voiceProvider && !visualProvider && !codexUrl) return null;
+  const item = (label: string, v: string, known: readonly string[]) => (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-ink-500">{label}:</span> {PROVIDER_LABELS[v] ?? v}
+      {!known.includes(v) && <UnknownProviderChip value={v} />}
+    </span>
+  );
+  return (
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-300">
+      {voiceProvider && item("Voice", voiceProvider, KNOWN_VOICE_PROVIDERS)}
+      {visualProvider && item("Visuals", visualProvider, KNOWN_VISUAL_PROVIDERS)}
+      {codexUrl && (
+        <a href={codexUrl} target="_blank" rel="noopener noreferrer" className="text-violet-200 underline-offset-2 hover:underline">
+          Codex entry ↗
+        </a>
+      )}
+    </p>
+  );
+}
+
+function ErrorBanner({ pkg }: { pkg: ContentPackage }) {
+  if (!pkg.lastError) return null;
+  return (
+    <div role="alert" className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-100 ring-1 ring-rose-400/40">
+      <p className="font-semibold">n8n reported a problem</p>
+      <p className="mt-0.5 text-xs text-rose-100/85">{pkg.lastError.message}</p>
+    </div>
+  );
+}
+
+function HeldReleaseBanner({ pkg }: { pkg: ContentPackage }) {
+  const rows = platformsHeldRelease(pkg);
+  if (rows.length === 0) return null;
+  return (
+    <div role="alert" className="rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-100 ring-1 ring-amber-400/60">
+      <p className="font-semibold">Held at release</p>
+      <ul className="mt-0.5 space-y-0.5 text-xs text-amber-100/85">
+        {rows.map((r) => (
+          <li key={r.platform}>
+            {PLATFORM_LABELS[r.platform]}: {r.holdReason ? HOLD_REASON_LABELS[r.holdReason].replace("Held at release: ", "") : "reason not given"}
+            {" "}— the private upload won&apos;t be made public until this is cleared.
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** published_private rows: founder can declare them out of date so they never go public. */
+function PrivateUploadPanel({
+  pkg,
+  busy,
+  onStale,
+}: {
+  pkg: ContentPackage;
+  busy: boolean;
+  onStale: (platform: ContentPackage["platforms"][number]["platform"]) => void;
+}) {
+  const rows = pkg.platforms.filter((p) => platformStatus(pkg, p) === "published_private");
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-xl bg-slate-500/10 px-3 py-2 text-sm text-slate-200 ring-1 ring-slate-400/30">
+      <p className="font-semibold">Uploaded private (audit pending)</p>
+      <p className="mt-0.5 text-xs text-slate-300/80">
+        Not live. If it&apos;s no longer right to publish, mark it out of date and it won&apos;t be released.
+      </p>
+      <ul className="mt-2 flex flex-wrap gap-2">
+        {rows.map((r) => (
+          <li key={r.platform} className="inline-flex items-center gap-2 rounded-lg bg-black/20 px-2 py-1 text-xs">
+            {PLATFORM_LABELS[r.platform]}
+            <button
+              type="button"
+              className="rounded-lg bg-slate-500/25 px-2 py-1 text-xs font-medium text-slate-50 ring-1 ring-slate-400/50 transition hover:bg-slate-500/35 disabled:opacity-40"
+              disabled={busy || Boolean(pkg.pendingAction)}
+              onClick={() => onStale(r.platform)}
+            >
+              Mark out of date
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function HeldTitleBanner({ pkg }: { pkg: ContentPackage }) {
   if (platformsHeldTitle(pkg).length === 0) return null;
   const yt = pkg.platforms.find((p) => p.platform === "youtube");
@@ -227,8 +334,8 @@ function HeldTitleBanner({ pkg }: { pkg: ContentPackage }) {
         {offending ? `“${offending}”` : "(title not sent)"}
       </p>
       <p className="mt-1 text-xs text-amber-100/80">
-        Pick one of the generated title options in the sheet&apos;s selected_title to release it. Other platforms keep
-        their own status.
+        Pick one of the generated options on the YouTube tab and press &ldquo;Use this title&rdquo; (or set the
+        sheet&apos;s selected_title). Other platforms keep their own status.
       </p>
     </div>
   );
@@ -336,7 +443,7 @@ export function ReviewCard({
             )}
             {busy && optimisticStatus && <span className="text-xs text-ink-400">Saving…</span>}
             <CredibilityChip label={pkg.credibilityLabel} />
-            {pkg.aiIllustration && <AiIllustrationTag />}
+            {pkg.contentType === "promo" ? <PromoChip /> : pkg.aiIllustration && <AiIllustrationTag />}
             {pkg.sensitive && <SensitiveBadge />}
             {(pkg.qaFlags?.length ?? 0) > 0 && <QaFlaggedChip count={pkg.qaFlags!.length} />}
             {pkg.example && <ExampleTag />}
@@ -344,6 +451,7 @@ export function ReviewCard({
           <h3 id={`subject-${pkg.packageId}`} className="text-lg font-semibold leading-snug text-ink-50">
             {pkg.subject}
           </h3>
+          <ProviderMeta pkg={pkg} />
           {pkg.lastSource === "sheet" && (
             <p className="text-[11px] text-ink-500">
               <span className="text-teal-300/80">Updated from sheet</span>
@@ -400,7 +508,14 @@ export function ReviewCard({
             void onAction(pkg, { action: "confirm_tone", revision: pkg.revision, toneChecked: true })
           }
         />
+        <ErrorBanner pkg={pkg} />
+        <HeldReleaseBanner pkg={pkg} />
         <HeldTitleBanner pkg={pkg} />
+        <PrivateUploadPanel
+          pkg={pkg}
+          busy={busy}
+          onStale={(platform) => void onAction(pkg, { action: "mark_stale", revision: pkg.revision, platform })}
+        />
         <ManualPanel
           pkg={pkg}
           busy={busy}
@@ -418,6 +533,10 @@ export function ReviewCard({
             coverImageUrl: pkg.coverImageUrl,
             storedTitle,
             rowDecided: ytDecided,
+            heldTitle: Boolean(ytRow && platformStatus(pkg, ytRow) === "held_title") && !pa,
+            pickBusy: busy,
+            onPickTitle: (titleIndex) =>
+              void onAction(pkg, { action: "pick_title", revision: pkg.revision, platform: "youtube", titleIndex }),
             selectedTitle,
             onSelectTitle: setSelectedTitle,
             editable: actionable && !busy && Boolean(ytRow && platformStatus(pkg, ytRow) === "review"),

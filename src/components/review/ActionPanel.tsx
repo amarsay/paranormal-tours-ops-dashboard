@@ -121,7 +121,7 @@ export function ActionPanel({
               return (
                 <span key={p.platform} className="inline-flex items-center gap-1.5 text-xs text-ink-500">
                   {PLATFORM_LABELS[p.platform]}
-                  <ContentStatusChip status={st} at={p.postedAt} />
+                  <ContentStatusChip status={st} at={p.postedAt} holdReason={p.holdReason} />
                 </span>
               );
             }

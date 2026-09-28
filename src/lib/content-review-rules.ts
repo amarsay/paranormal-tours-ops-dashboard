@@ -70,10 +70,19 @@ export function isAwaitingManual(pkg: Pick<ContentPackage, "status" | "platforms
   return platformsAwaitingManual(pkg).length > 0;
 }
 
-/** Card goes in the "Held" group at the top of /review (any held_tone / held_title row). */
+/** Rows held by the private→public release gate. */
+export function platformsHeldRelease(pkg: Pick<ContentPackage, "status" | "platforms">): PlatformCopy[] {
+  return pkg.platforms.filter((p) => platformStatus(pkg, p) === "held_release");
+}
+
+/** Card goes in the "Held" group at the top of /review (any held_tone / held_title / held_release row). */
 export function isHeld(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
   if (PACKAGE_OVERRIDES.includes(pkg.status)) return false;
-  return platformsHeld(pkg).length > 0 || platformsHeldTitle(pkg).length > 0;
+  return (
+    platformsHeld(pkg).length > 0 ||
+    platformsHeldTitle(pkg).length > 0 ||
+    platformsHeldRelease(pkg).length > 0
+  );
 }
 
 export function toneConfirmedForCurrent(pkg: Pick<ContentPackage, "revision" | "toneCheckedRevision">): boolean {
@@ -97,6 +106,8 @@ export const PENDING_LABEL: Record<ReviewAction, string> = {
   kill: "Killing…",
   confirm_tone: "Confirming tone…",
   mark_manual_done: "Marking posted…",
+  mark_stale: "Marking out of date…",
+  pick_title: "Using title…",
 };
 
 export function pendingAgeMs(pkg: Pick<ContentPackage, "pendingAction">, now = Date.now()): number {
@@ -129,6 +140,18 @@ export function pendingResolvedBy(prev: ContentPackage, next: ContentPackage): b
     const id = pa.payload.platform;
     const row = next.platforms.find((p) => p.platform === id);
     return !row || platformStatus(next, row) !== "awaiting_manual";
+  }
+  if (pa.payload.action === "mark_stale") {
+    const id = pa.payload.platform;
+    const row = next.platforms.find((p) => p.platform === id);
+    return !row || platformStatus(next, row) !== "published_private";
+  }
+  if (pa.payload.action === "pick_title") {
+    // Resolved once the sheet shows the picked title AND the row has left held_title.
+    const want = youtubeTitleOptions(next)[pa.payload.titleIndex] ?? youtubeTitleOptions(prev)[pa.payload.titleIndex];
+    const row = next.platforms.find((p) => p.platform === "youtube");
+    const sel = row && "selectedTitle" in row ? row.selectedTitle : undefined;
+    return Boolean(row && sel === want && platformStatus(next, row) !== "held_title");
   }
   const payload = pa.payload;
   if (payload.action === "confirm_tone") return false;
@@ -174,6 +197,32 @@ export function validateAction(
       status: 409,
       error: `Waiting for n8n to confirm the last action (${pkg.pendingAction.action}). Retry it instead of sending a new one.`,
     };
+  }
+  if (req.action === "mark_stale") {
+    const row = pkg.platforms.find((p) => p.platform === req.platform);
+    if (!req.platform || !row) {
+      return { ok: false, status: 400, error: "mark_stale needs a platform that's on this package." };
+    }
+    if (platformStatus(pkg, row) !== "published_private") {
+      return { ok: false, status: 409, error: `${req.platform} isn't a private upload, so it can't be marked out of date.` };
+    }
+    return { ok: true };
+  }
+  if (req.action === "pick_title") {
+    if (req.platform !== "youtube") {
+      return { ok: false, status: 400, error: "pick_title is only for platform youtube." };
+    }
+    const row = pkg.platforms.find((p) => p.platform === "youtube");
+    if (!row) return { ok: false, status: 400, error: "This package has no YouTube row." };
+    if (platformStatus(pkg, row) !== "held_title") {
+      return { ok: false, status: 409, error: "YouTube isn't held for its title." };
+    }
+    const opts = youtubeTitleOptions(pkg);
+    const i = req.titleIndex;
+    if (typeof i !== "number" || !Number.isInteger(i) || i < 0 || i >= opts.length) {
+      return { ok: false, status: 400, error: `titleIndex must be an integer from 0 to ${Math.max(0, opts.length - 1)}.` };
+    }
+    return { ok: true };
   }
   if (req.action === "mark_manual_done") {
     const row = pkg.platforms.find((p) => p.platform === req.platform);

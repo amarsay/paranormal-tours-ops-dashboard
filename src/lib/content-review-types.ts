@@ -26,6 +26,8 @@ export type ContentStatus = (typeof CONTENT_STATUSES)[number];
  * Lemon8 until an API is confirmed). "published_private" = YouTube uploaded
  * as private while the Google API audit is pending (NOT live).
  * "posted_manual" = terminal: finished by hand (set by n8n after mark_manual_done).
+ * "held_release" = youtube published_private video held by the private→public
+ * release gate (see holdReason). "out_of_date" = terminal: won't be released.
  */
 export const PLATFORM_STATUSES = [
   "review",
@@ -36,12 +38,24 @@ export const PLATFORM_STATUSES = [
   "awaiting_manual",
   "posted_manual",
   "published_private",
+  "held_release",
+  "out_of_date",
   "killed",
   "scheduled",
   "posted",
   "failed",
 ] as const;
 export type PlatformStatus = (typeof PLATFORM_STATUSES)[number];
+
+/** Why the private→public release gate is holding a row (status held_release). */
+export const HOLD_REASONS = ["codex_status", "banned_phrase", "tone"] as const;
+export type HoldReason = (typeof HOLD_REASONS)[number];
+
+export const CONTENT_TYPES = ["daily_ai", "promo"] as const;
+export type ContentType = (typeof CONTENT_TYPES)[number];
+
+export const KNOWN_VOICE_PROVIDERS = ["elevenlabs", "xai_voice"] as const;
+export const KNOWN_VISUAL_PROVIDERS = ["xai_grok"] as const;
 
 /** Legacy values still accepted on inbound POSTs (mapped on the way in). */
 export const LEGACY_CONTENT_STATUS: Record<string, ContentStatus> = { rejected: "killed" };
@@ -128,8 +142,8 @@ export interface ContentScript {
   hookOverlay?: string;
   /** Question the video leaves open (comment prompt). */
   openQuestion?: string;
-  /** Scene used for the cover/thumbnail frame (scene index or label). */
-  coverFrameScene?: number | string;
+  /** Scene used for the cover/thumbnail frame: 1-based scene number. */
+  coverFrameScene?: number;
 }
 
 /** Automatic post-render QA; a video that fails twice arrives flagged. */
@@ -151,6 +165,8 @@ interface PlatformBase {
   /** posted_manual (sheet sync): when it was posted and for which revision. */
   postedAt?: string | null;
   postedRevision?: number | null;
+  /** held_release only. */
+  holdReason?: HoldReason | null;
 }
 
 export interface SocialPlatformCopy extends PlatformBase {
@@ -208,10 +224,26 @@ export interface PendingAction {
   attempts?: number;
   /** Exact payload, so Retry resends the same body (same revision → n8n dedupes). */
   payload: ReviewActionPayload;
+  /** The exact JSON string first sent; Retry resends these bytes with a fresh timestamp/signature. */
+  rawBody?: string;
+}
+
+/** Error n8n reports back (incoming `error`), shown inline on the card. */
+export interface PackageError {
+  code: string;
+  message: string;
+  at: string;
 }
 
 export interface ContentPackage {
   packageId: string;
+  /** Pipeline-owned; the dashboard never changes it (incoming changes are ignored + noted). */
+  contentType: ContentType;
+  /** Free strings; unknown values are shown with an "Unknown provider" chip. */
+  voiceProvider?: string | null;
+  visualProvider?: string | null;
+  codexUrl?: string | null;
+  lastError?: PackageError | null;
   revision: number;
   status: ContentStatus;
   subject: string;
@@ -248,8 +280,23 @@ export interface ContentPackage {
   example?: boolean;
 }
 
-export type ReviewAction = "approve" | "reject" | "kill" | "confirm_tone" | "mark_manual_done";
-export const REVIEW_ACTIONS: ReviewAction[] = ["approve", "reject", "kill", "confirm_tone", "mark_manual_done"];
+export type ReviewAction =
+  | "approve"
+  | "reject"
+  | "kill"
+  | "confirm_tone"
+  | "mark_manual_done"
+  | "mark_stale"
+  | "pick_title";
+export const REVIEW_ACTIONS: ReviewAction[] = [
+  "approve",
+  "reject",
+  "kill",
+  "confirm_tone",
+  "mark_manual_done",
+  "mark_stale",
+  "pick_title",
+];
 
 /** Dashboard → n8n webhook (single URL; body.action = approve | reject | kill). */
 export interface DecisionActionPayload {
@@ -287,7 +334,34 @@ export interface ManualDoneActionPayload {
   at: string;
 }
 
-export type ReviewActionPayload = DecisionActionPayload | ConfirmToneActionPayload | ManualDoneActionPayload;
+/** Dashboard → n8n webhook: a private YouTube upload is out of date and must not be released. */
+export interface MarkStaleActionPayload {
+  action: "mark_stale";
+  packageId: string;
+  revision: number;
+  platform: PlatformId;
+  actor: string;
+  at: string;
+}
+
+/** Dashboard → n8n webhook: founder picks a generated title for a held_title youtube row. */
+export interface PickTitleActionPayload {
+  action: "pick_title";
+  packageId: string;
+  revision: number;
+  platform: "youtube";
+  /** 0-based index into script.youtubeTitleOptions (no free text). */
+  titleIndex: number;
+  actor: string;
+  at: string;
+}
+
+export type ReviewActionPayload =
+  | DecisionActionPayload
+  | ConfirmToneActionPayload
+  | ManualDoneActionPayload
+  | MarkStaleActionPayload
+  | PickTitleActionPayload;
 
 /** Browser → dashboard action route body. */
 export interface ReviewActionRequest {
@@ -298,8 +372,10 @@ export interface ReviewActionRequest {
   feedback?: string;
   toneChecked?: boolean;
   selectedTitle?: string;
-  /** mark_manual_done only: the platform row finished by hand. */
+  /** mark_manual_done / mark_stale / pick_title: the platform row. */
   platform?: PlatformId;
+  /** pick_title only: 0-based index into script.youtubeTitleOptions. */
+  titleIndex?: number;
   /** Real mode: resend the stored pendingAction payload unchanged. */
   retry?: boolean;
 }

@@ -22,6 +22,8 @@ const TAB_DOT: Partial<Record<PlatformStatus, string>> = {
   held_title: "bg-amber-400",
   awaiting_manual: "bg-blue-400",
   posted_manual: "bg-emerald-400",
+  held_release: "bg-amber-400",
+  out_of_date: "bg-slate-500",
   published_private: "bg-slate-400",
   not_approved: "bg-slate-500",
   killed: "bg-slate-500",
@@ -93,16 +95,28 @@ export interface YoutubeChoice {
   /** Stored (sheet) value on the youtube row; null after approval = default option 1. */
   storedTitle?: string | null;
   rowDecided: boolean;
+  /** youtube row is held_title: radios stay live and "Use this title" sends pick_title. */
+  heldTitle?: boolean;
+  onPickTitle?: (titleIndex: number) => void;
+  pickBusy?: boolean;
   selectedTitle: string | null;
   onSelectTitle: (t: string) => void;
   /** Row still in review → founder can pick; otherwise read-only. */
   editable: boolean;
 }
 
+/** coverFrameScene is 1-based; the frame is grabbed 0.5 s after that scene starts. */
+function coverFrameLabel(script: ContentScript, n: number): string {
+  const scene = script.scenes.find((s) => s.index === n) ?? script.scenes[n - 1];
+  const desc = scene?.visual || scene?.text;
+  return `Scene ${n}${desc ? ` — ${desc}` : ""}`;
+}
+
 function YoutubeScriptExtras({ yt, name }: { yt: YoutubeChoice; name: string }) {
   const options = (yt.script.youtubeTitleOptions ?? []).filter((t) => t.trim());
   const { hookOverlay, openQuestion, coverFrameScene } = yt.script;
-  const hasExtras = Boolean(hookOverlay || openQuestion || (coverFrameScene !== undefined && coverFrameScene !== ""));
+  const hasExtras = Boolean(hookOverlay || openQuestion || coverFrameScene !== undefined);
+  const pickable = !yt.rowDecided || Boolean(yt.heldTitle);
   if (!options.length && !hasExtras && !yt.coverImageUrl) return null;
   const showDefault = yt.rowDecided && !yt.storedTitle && options.length > 0;
   return (
@@ -131,10 +145,13 @@ function YoutubeScriptExtras({ yt, name }: { yt: YoutubeChoice; name: string }) 
           )}
         </p>
       )}
-      {options.length > 0 && !yt.rowDecided && (
-        <fieldset className="space-y-1.5" disabled={!yt.editable}>
+      {options.length > 0 && pickable && (
+        <fieldset className="space-y-1.5" disabled={!yt.editable && !yt.heldTitle}>
           <legend className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">
-            Title options <span className="normal-case tracking-normal text-ink-400">(pick one — sent with Approve)</span>
+            Title options{" "}
+            <span className="normal-case tracking-normal text-ink-400">
+              {yt.heldTitle ? "(pick one, then Use this title)" : "(pick one — sent with Approve)"}
+            </span>
           </legend>
           {options.map((t) => (
             <label key={t} className="flex items-start gap-2 text-sm text-ink-100">
@@ -153,8 +170,26 @@ function YoutubeScriptExtras({ yt, name }: { yt: YoutubeChoice; name: string }) 
               </span>
             </label>
           ))}
-          {!yt.selectedTitle && yt.editable && (
+          {!yt.selectedTitle && yt.editable && !yt.heldTitle && (
             <p className="text-xs text-amber-200/90">No title picked yet — needed to approve YouTube.</p>
+          )}
+          {yt.heldTitle && yt.onPickTitle && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                className="rounded-lg bg-amber-500/25 px-3 py-1.5 text-xs font-medium text-amber-50 ring-1 ring-amber-400/50 transition hover:bg-amber-500/35 disabled:opacity-40"
+                disabled={!yt.selectedTitle || yt.pickBusy}
+                onClick={() => {
+                  const i = options.indexOf(yt.selectedTitle ?? "");
+                  if (i >= 0) yt.onPickTitle?.(i);
+                }}
+              >
+                Use this title
+              </button>
+              <span className="text-xs text-ink-400">
+                {yt.selectedTitle ? "Replaces the held hand-typed title." : "Pick one of the generated options first."}
+              </span>
+            </div>
           )}
         </fieldset>
       )}
@@ -171,11 +206,7 @@ function YoutubeScriptExtras({ yt, name }: { yt: YoutubeChoice; name: string }) 
           <div>
             <dt className="text-ink-500">Cover frame</dt>
             <dd className="text-ink-200">
-              {coverFrameScene === undefined || coverFrameScene === ""
-                ? "—"
-                : typeof coverFrameScene === "number"
-                  ? `Scene ${coverFrameScene}`
-                  : coverFrameScene}
+              {coverFrameScene === undefined ? "—" : coverFrameLabel(yt.script, coverFrameScene)}
             </dd>
           </div>
         </dl>
@@ -406,7 +437,11 @@ export function PlatformTabs({
       >
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-ink-100">{PLATFORM_LABELS[current.platform]}</h4>
-          <ContentStatusChip status={platformStatus({ status: pkgStatus }, current)} at={current.postedAt} />
+          <ContentStatusChip
+            status={platformStatus({ status: pkgStatus }, current)}
+            at={current.postedAt}
+            holdReason={current.holdReason}
+          />
         </div>
         <PanelBody
           p={current}

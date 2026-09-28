@@ -4,7 +4,10 @@ import type {
   ContentPackage,
   ContentReviewMode,
   ContentStatus,
+  ContentType,
   CredibilityLabel,
+  HoldReason,
+  PackageError,
   PlatformCopy,
   PlatformStatus,
   QaFlag,
@@ -19,6 +22,8 @@ import {
   HARD_STOP_GBP,
   LEGACY_CONTENT_STATUS,
   LEGACY_PLATFORM_STATUS,
+  CONTENT_TYPES,
+  HOLD_REASONS,
   PLATFORM_IDS,
   PLATFORM_STATUSES,
   QA_CHECKS,
@@ -273,6 +278,7 @@ export function upgradeStored(raw: unknown): ContentPackage {
   if (!pkg.sheetRef) pkg.sheetRef = sheetRefFrom(b.source) ?? { tab: "Unknown tab", row: 0, sheetUrl: null };
   if (isObj(b.source)) delete pkg.source;
   pkg.status = contentStatus(b.status) ?? "review";
+  if (!pkg.contentType) pkg.contentType = "daily_ai";
   pkg.platforms = (Array.isArray(b.platforms) ? b.platforms : []).map((p: PlatformCopy) => ({
     ...p,
     status: rowStatus(p.status) ?? defaultPlatformStatus(pkg.status),
@@ -300,6 +306,15 @@ function parsePlatforms(input: unknown, pkgStatus: ContentStatus): { ok: true; r
       copy.status = defaultPlatformStatus(pkgStatus);
     }
     if (id === "lemon8") (copy as { manual: true }).manual = true;
+    if (copy.status === "held_release") {
+      const r = str(p.holdReason);
+      if (!(HOLD_REASONS as readonly string[]).includes(r)) {
+        return { ok: false, error: `platforms[${id}].holdReason must be one of ${HOLD_REASONS.join(", ")} when status is held_release.` };
+      }
+      copy.holdReason = r as HoldReason;
+    } else if (p.holdReason !== undefined) {
+      copy.holdReason = (HOLD_REASONS as readonly string[]).includes(str(p.holdReason)) ? (p.holdReason as HoldReason) : null;
+    }
     if ("postedAt" in p) copy.postedAt = typeof p.postedAt === "string" ? p.postedAt : null;
     if ("postedRevision" in p) copy.postedRevision = Number.isInteger(p.postedRevision) ? (p.postedRevision as number) : null;
     if (id === "youtube" && "selectedTitle" in p) {
@@ -321,6 +336,10 @@ export type InboundMeta = {
   /** Explicit `sensitive: false` was sent. */
   sensitiveFalse: boolean;
   clearPending: boolean;
+  /** contentType sent on this post (validated), if any. */
+  contentType?: ContentType;
+  /** error sent: object → set, null → clear, undefined → keep. */
+  error?: PackageError | null;
 };
 
 export type ParseResult = { ok: true; meta: InboundMeta; body: Fields } | { ok: false; error: string };
@@ -346,6 +365,25 @@ export function parseInboundMeta(input: unknown): ParseResult {
     }
     source = input.source as UpdateSource;
   }
+  let contentType: ContentType | undefined;
+  if (input.contentType !== undefined) {
+    if (!(CONTENT_TYPES as readonly string[]).includes(str(input.contentType))) {
+      return { ok: false, error: `contentType must be one of ${CONTENT_TYPES.join(", ")}.` };
+    }
+    contentType = input.contentType as ContentType;
+  }
+  let error: PackageError | null | undefined;
+  if (input.error === null) error = null;
+  else if (input.error !== undefined) {
+    if (!isObj(input.error) || !str(input.error.message).trim()) {
+      return { ok: false, error: "error must be an object { code, message } (or null to clear)." };
+    }
+    error = {
+      code: str(input.error.code, "unknown").slice(0, 80) || "unknown",
+      message: str(input.error.message).slice(0, 500),
+      at: new Date().toISOString(),
+    };
+  }
   return {
     ok: true,
     meta: {
@@ -354,6 +392,8 @@ export function parseInboundMeta(input: unknown): ParseResult {
       source,
       sensitiveFalse: input.sensitive === false,
       clearPending: input.clearPending === true,
+      contentType,
+      error,
     },
     body: input,
   };
@@ -396,7 +436,7 @@ function safeUrl(v: unknown): string | null {
   }
 }
 
-function parseScript(v: unknown): ContentPackage["script"] {
+function parseScript(v: unknown): { ok: true; script: ContentPackage["script"] } | { ok: false; error: string } {
   const s = isObj(v) ? v : {};
   const out: ContentPackage["script"] = {
     hook: str(s.hook),
@@ -410,10 +450,16 @@ function parseScript(v: unknown): ContentPackage["script"] {
   }
   if (typeof s.hookOverlay === "string") out.hookOverlay = s.hookOverlay;
   if (typeof s.openQuestion === "string") out.openQuestion = s.openQuestion;
-  if (typeof s.coverFrameScene === "number" || typeof s.coverFrameScene === "string") {
-    out.coverFrameScene = s.coverFrameScene;
+  if (s.coverFrameScene !== undefined && s.coverFrameScene !== null) {
+    // 1-based integer only; numeric strings are coerced, labels rejected.
+    const raw = s.coverFrameScene;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isInteger(n) || n < 1) {
+      return { ok: false, error: "script.coverFrameScene must be a 1-based scene number (integer ≥ 1)." };
+    }
+    out.coverFrameScene = n;
   }
-  return out;
+  return { ok: true, script: out };
 }
 
 /** Full package (new item or newer revision). */
@@ -433,6 +479,8 @@ export function normalisePackage(meta: InboundMeta, b: Fields): NormaliseResult 
 
   const qa = parseQaFlags(b.qaFlags);
   if (!qa.ok) return qa;
+  const script = parseScript(b.script);
+  if (!script.ok) return script;
   const video = isObj(b.video) ? (b.video as ContentPackage["video"]) : null;
   const tone = toneRevisionFrom(b, meta.revision);
 
@@ -449,8 +497,13 @@ export function normalisePackage(meta: InboundMeta, b: Fields): NormaliseResult 
     toneCheckedRevision: tone ?? null,
     blockedReason: typeof b.blockedReason === "string" ? b.blockedReason : null,
     video,
-    script: parseScript(b.script),
+    script: script.script,
     coverImageUrl: safeUrl(b.coverImageUrl),
+    contentType: meta.contentType ?? "daily_ai",
+    voiceProvider: typeof b.voiceProvider === "string" ? b.voiceProvider.slice(0, 60) : null,
+    visualProvider: typeof b.visualProvider === "string" ? b.visualProvider.slice(0, 60) : null,
+    codexUrl: safeUrl(b.codexUrl),
+    lastError: meta.error ?? null,
     qaFlags: qa.flags,
     platforms: rows.rows,
     revisionCount: num(b.revisionCount, 0) ?? 0,
@@ -510,7 +563,16 @@ export function mergeSameRevision(existing: ContentPackage, meta: InboundMeta, b
   for (const k of simple) {
     if (b[k] !== undefined) (next as unknown as Fields)[k] = b[k];
   }
-  if (b.script !== undefined) next.script = parseScript(b.script);
+  if (b.script !== undefined) {
+    const script = parseScript(b.script);
+    if (!script.ok) return script;
+    next.script = script.script;
+  }
+  if (meta.contentType && !existing.contentType) next.contentType = meta.contentType;
+  if (typeof b.voiceProvider === "string") next.voiceProvider = b.voiceProvider.slice(0, 60);
+  if (typeof b.visualProvider === "string") next.visualProvider = b.visualProvider.slice(0, 60);
+  if (b.codexUrl !== undefined) next.codexUrl = safeUrl(b.codexUrl);
+  if (meta.error !== undefined) next.lastError = meta.error;
   if (b.coverImageUrl !== undefined) next.coverImageUrl = safeUrl(b.coverImageUrl);
   if (b.qaFlags !== undefined) {
     const qa = parseQaFlags(b.qaFlags);
@@ -573,11 +635,43 @@ export function applyInbound(existing: ContentPackage | null, meta: InboundMeta,
         ];
       }
     }
+    // contentType is pipeline-owned and fixed per packageId: ignore changes, note them.
+    const storedType = existing.contentType ?? "daily_ai";
+    if (pkg.contentType !== storedType) {
+      pkg.contentType = storedType;
+    }
+    if (meta.contentType && meta.contentType !== storedType) {
+      pkg.history = [
+        ...pkg.history,
+        {
+          revision: pkg.revision,
+          action: "note",
+          stages: [],
+          feedback: `contentType change ignored (${storedType} → ${meta.contentType})`,
+          actor: meta.source,
+          at: new Date().toISOString(),
+        },
+      ];
+    }
     // Keep example marker on seeded items that n8n/sheet updates in place.
     if (existing.example && body.example === undefined) pkg.example = true;
     if (same && existing.pendingAction) {
       pkg.pendingAction = meta.clearPending || pendingResolvedBy(existing, pkg) ? null : existing.pendingAction;
     }
   }
+  if (meta.error) {
+    pkg.history = [
+      ...pkg.history,
+      {
+        revision: pkg.revision,
+        action: "note",
+        stages: [],
+        feedback: `n8n error ${meta.error.code}: ${meta.error.message}`,
+        actor: meta.source,
+        at: meta.error.at,
+      },
+    ];
+  }
+  if (meta.clearPending) pkg.pendingAction = null;
   return { ok: true, pkg, kind: !existing ? "created" : same ? "updated" : "replaced" };
 }

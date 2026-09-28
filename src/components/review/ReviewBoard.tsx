@@ -34,6 +34,8 @@ const OPTIMISTIC: Record<ReviewActionRequest["action"], ContentStatus> = {
   kill: "killed",
   confirm_tone: "approved",
   mark_manual_done: "approved",
+  mark_stale: "approved",
+  pick_title: "approved",
 };
 
 const DONE_MSG: Record<ReviewActionRequest["action"], string> = {
@@ -42,6 +44,8 @@ const DONE_MSG: Record<ReviewActionRequest["action"], string> = {
   kill: "Item killed",
   confirm_tone: "Tone confirmed",
   mark_manual_done: "Marked posted",
+  mark_stale: "Marked out of date",
+  pick_title: "Title picked",
 };
 
 function approvedSummary(p: ContentPackage): string | null {

@@ -84,7 +84,7 @@ function examplePlatforms(
     {
       platform: "youtube",
       title: `EXAMPLE — ${tag} (placeholder Short title)`,
-      description: `${base}\n\nPlaceholder YouTube description. AI-generated illustration.`,
+      description: `${base}\n\nPlaceholder YouTube description. AI-generated visuals and voice.`,
       tags: ["example", "placeholder"],
       hashtags: ["Shorts", "ExampleOnly"],
       cta,
@@ -149,11 +149,13 @@ const exampleScript = (tag: string) => ({
   coverFrameScene: 3,
 });
 
+type SeedPackage = Omit<ContentPackage, "contentType"> & Partial<Pick<ContentPackage, "contentType">>;
+
 export function buildMockPackages(): ContentPackage[] {
   const now = new Date().toISOString();
   const sheetUrl = "https://example.com/placeholder-sheet";
 
-  return [
+  const seeds: SeedPackage[] = [
     {
       packageId: "cp_example_001",
       revision: 1,
@@ -455,5 +457,101 @@ export function buildMockPackages(): ContentPackage[] {
       lastSourceAt: now,
       example: true,
     },
+    {
+      // Held at release: the private YouTube upload is blocked by the
+      // private→public gate because the Codex entry's status changed.
+      packageId: "cp_example_009",
+      revision: 1,
+      status: "approved",
+      subject: "EXAMPLE — YouTube held at release (Codex status changed)",
+      sheetRef: { tab: "Agent Stack Results", row: 109, sheetUrl: `${sheetUrl}#row=109` },
+      credibilityLabel: "REPORTED",
+      aiIllustration: true,
+      sensitive: false,
+      toneCheckedRevision: null,
+      blockedReason: null,
+      voiceProvider: "xai_voice",
+      video: {
+        url: "/review-mock/example-9x16.mp4",
+        poster: "/review-mock/example-poster.jpg",
+        captionsVtt: "/review-mock/example-captions.vtt",
+        durationSec: 6,
+      },
+      coverImageUrl: "/review-mock/example-poster.jpg",
+      script: exampleScript("item nine"),
+      platforms: examplePlatforms("item nine", {
+        selectedTitle: "EXAMPLE title option C — the item nine placeholder",
+        statuses: {
+          facebook: "posted",
+          instagram: "posted",
+          threads: "posted",
+          bluesky: "posted",
+          youtube: "held_release",
+          tiktok: "posted_manual",
+          lemon8: "posted_manual",
+          website: "posted",
+        },
+      }).map((r) => (r.platform === "youtube" ? { ...r, holdReason: "codex_status" as const } : r)),
+      revisionCount: 0,
+      revisionCap: 3,
+      costEstimateGbp: 0.45,
+      costActualGbp: 0.46,
+      monthToDateGbp: MOCK_MONTH_TO_DATE_GBP,
+      stageCostEstimatesGbp: EXAMPLE_STAGE_COSTS,
+      history: [{ revision: 1, action: "generated", stages: [], feedback: "", at: now }],
+      updatedAt: now,
+      lastSource: "n8n",
+      lastSourceAt: now,
+      lastError: {
+        code: "release_gate",
+        message: "EXAMPLE: Codex entry status changed after upload; release paused until it's re-checked.",
+        at: now,
+      },
+      example: true,
+    },
+    {
+      // Promo: not AI daily content. Manual approval only; no AI tag.
+      packageId: "cp_example_010",
+      revision: 1,
+      status: "review",
+      contentType: "promo",
+      subject: "EXAMPLE — Promo: placeholder autumn tour offer",
+      sheetRef: { tab: "Promos", row: 12, sheetUrl: `${sheetUrl}#promo=12` },
+      credibilityLabel: "DOCUMENTED",
+      aiIllustration: false,
+      sensitive: false,
+      toneCheckedRevision: null,
+      blockedReason: null,
+      voiceProvider: "founder_recorded",
+      visualProvider: null,
+      codexUrl: null,
+      video: { url: null, poster: "/review-mock/example-poster-promo.jpg", captionsVtt: null, durationSec: 30 },
+      script: { ...exampleScript("the promo"), youtubeTitleOptions: [], coverFrameScene: 1 },
+      platforms: examplePlatforms("the promo").filter((p) =>
+        ["facebook", "instagram", "website"].includes(p.platform)
+      ),
+      revisionCount: 0,
+      revisionCap: 3,
+      costEstimateGbp: 0,
+      costActualGbp: 0,
+      monthToDateGbp: MOCK_MONTH_TO_DATE_GBP,
+      stageCostEstimatesGbp: EXAMPLE_STAGE_COSTS,
+      history: [{ revision: 1, action: "generated", stages: [], feedback: "", at: now }],
+      updatedAt: now,
+      lastSource: "sheet",
+      lastSourceAt: now,
+      example: true,
+    },
   ];
+  return seeds.map(
+    (p) =>
+      ({
+        contentType: "daily_ai",
+        voiceProvider: p.status === "blocked" ? null : "elevenlabs",
+        visualProvider: p.status === "blocked" ? null : "xai_grok",
+        codexUrl: p.status === "blocked" ? null : `https://example.com/codex/${p.packageId}`,
+        ...p,
+      }) as ContentPackage
+  );
 }
+

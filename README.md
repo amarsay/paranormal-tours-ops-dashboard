@@ -154,35 +154,29 @@ Founder review of daily video packages (Billy spec v0.1 + agreed contract change
 |------|------|---------|
 | `GET /api/content-review?status=review` | Review session (when passcode set) or `Bearer OPS_WRITE_TOKEN` | List packages + mode + budget (`review` = any platform row still `review`) |
 | `POST /api/content-review` | `Bearer OPS_WRITE_TOKEN` | n8n / sheet sync upserts a package (rules below) |
-| `POST /api/content-review/{packageId}/action` | Review session | `approve` / `reject` / `kill` / `confirm_tone` / `mark_manual_done`, or `{ retry: true, revision }` |
+| `POST /api/content-review/{packageId}/action` | Review session | `approve` / `reject` / `kill` / `confirm_tone` / `mark_manual_done` / `mark_stale` / `pick_title`, or `{ retry: true, revision }` |
 | `GET /api/content-review/summary` | Public (counts only) | `{ pending, held, manual, blocked, mock }` for the nav badge / Overview row |
 | `POST /api/content-review/reset-mock` | Review session, mock mode only | Restore the example packages |
 | `POST|DELETE /api/review-auth` | — | Passcode sign-in / sign-out (signed HTTP-only cookie) |
 
+Full contract (both directions, signing, indexing): **section 3 of `content-pipeline/BILLY-content-review-v0.1.md`**. Summary:
+
 ### Inbound package POST (n8n → dashboard)
 
-- Keyed by `packageId` (legacy `contentId` accepted as an alias). `source: "sheet" | "n8n"` (default `n8n`); the card shows "Updated from sheet" when the last write came from the sheet. Sheet row reference is `sheetRef: { tab, row, sheetUrl }` (a legacy `source` *object* is still read as `sheetRef`).
-- **Older revision → 409.** **Same revision → accepted** as a status / platform-status update: send only what changed (e.g. `{ packageId, revision, source: "sheet", platforms: [{ platform: "website", status: "approved" }] }`); rows merge by `platform`. **Newer revision or new item →** full package (`status`, `subject` required).
-- Row `status`: `review | approved | not_approved | held_tone | held_title | awaiting_manual | posted_manual | published_private | killed | scheduled | posted | failed` (`posted_manual` rows may carry `postedAt` + `postedRevision`). Package `status`: `review | revising | approved | scheduled | posted | failed | killed | blocked`. Legacy `rejected` → `killed`, `skipped` → `not_approved`.
-- A card stays in **Awaiting review** while any row is `review` (derived; package status alone isn't trusted). `held_tone` / `held_title` rows put it in **Held by the publisher** at the top; `awaiting_manual` rows put it in **To finish by hand**. `published_private` (YouTube private upload while the Google API audit is pending) is never shown as live.
-- Optional: `toneCheckedRevision` (or `toneChecked: true` = this revision), `qaFlags: [{ check: duration|first_word|scene_length|loudness, detail }]`, `coverImageUrl`, `script.youtubeTitleOptions[]`, `script.hookOverlay`, `script.openQuestion`, `script.coverFrameScene`, youtube row `selectedTitle` (string|null; sheet is truth, null after approval = option 1 default).
-- `sensitive` can't be cleared from here: an inbound `false` over a stored `true` is ignored and noted in history ("sensitive flag change ignored").
-- `pendingAction` clears when the inbound state shows the action landed (approve: approved rows no longer `review`; reject: `revising` or newer revision; kill: `killed`; confirm_tone: `toneCheckedRevision` = revision or no `held_tone` rows; mark_manual_done: row no longer `awaiting_manual`), on any newer revision, or when n8n sends `clearPending: true`.
+- Keyed by `packageId` (legacy `contentId` accepted). `source: "sheet" | "n8n"` (default `n8n`); "Updated from sheet" shows on the card. Row reference is `sheetRef: { tab, row, sheetUrl }`.
+- **Older revision → 409. Same revision → accepted** as a partial status / platform-status merge (rows merge by `platform`). Newer or new → full package.
+- Row `status`: `review | approved | not_approved | held_tone | held_title | held_release | awaiting_manual | posted_manual | published_private | out_of_date | killed | scheduled | posted | failed`. `held_release` needs `holdReason: codex_status | banned_phrase | tone`. `posted_manual` may carry `postedAt` + `postedRevision`.
+- Groups derive from rows: **Held by the publisher** (held_*), **Awaiting review** (any `review`), **To finish by hand** (`awaiting_manual`).
+- `contentType: daily_ai | promo` (default daily_ai) and `sensitive` are pipeline-owned: inbound changes are ignored and noted in history.
+- Optional: `toneCheckedRevision` / `toneChecked`, `qaFlags[{check,detail}]`, `coverImageUrl`, `codexUrl`, `voiceProvider`, `visualProvider` (unknown values → "Unknown provider" chip), `script.youtubeTitleOptions[]` / `hookOverlay` / `openQuestion` / `coverFrameScene` (1-based integer), youtube row `selectedTitle`.
+- `error: { code, message }` shows the message inline (code kept in history; `null` clears). `clearPending: true` clears a pending action.
 
 ### Outbound action webhook (dashboard → n8n)
 
-Single URL `N8N_REVIEW_WEBHOOK_URL` (e.g. `https://paranormaltours.duckdns.org/webhook/pt-content/review`), signed `X-PT-Signature: hex(HMAC-SHA256(N8N_WEBHOOK_SECRET, rawBody))`; `X-PT-Attempt` (unsigned) is `>1` on a founder Retry, which resends the identical body. Switch on `body.action`:
+Single `N8N_REVIEW_WEBHOOK_URL`; `body.action` = `approve | reject | kill | confirm_tone | mark_manual_done | mark_stale | pick_title` (`titleIndex` is 0-based).
+Headers: `X-PT-Timestamp: <unix seconds>` (fresh each attempt), `X-PT-Signature: <bare lowercase hex>` = HMAC-SHA256(`N8N_WEBHOOK_SECRET`, `${timestamp}.${rawBody}`), `X-PT-Attempt` (unsigned). Retry resends the identical raw body (same `at`) with a new timestamp and signature.
 
-```json
-{ "action": "approve", "packageId": "…", "revision": 2, "platforms": ["instagram","youtube"], "stages": [], "feedback": "", "toneChecked": true, "selectedTitle": "…", "actor": "founder", "at": "ISO" }
-{ "action": "reject",  "packageId": "…", "revision": 2, "platforms": [], "stages": ["script"], "feedback": "…", "actor": "founder", "at": "ISO" }
-{ "action": "kill",    "packageId": "…", "revision": 4, "platforms": [], "stages": [], "feedback": "", "actor": "founder", "at": "ISO" }
-{ "action": "confirm_tone", "packageId": "…", "revision": 1, "toneChecked": true, "actor": "founder", "at": "ISO" }
-{ "action": "mark_manual_done", "packageId": "…", "revision": 1, "platform": "tiktok", "actor": "founder", "at": "ISO" }
-```
-
-- `toneChecked` must be `true` to approve a SENSITIVE item (server-validated, per revision). `selectedTitle` is required when approving YouTube and `script.youtubeTitleOptions` exist, and must be one of them (no free text).
-- **Mock mode** (no `N8N_REVIEW_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET`): EXAMPLE packages are seeded and actions apply instantly to the local cache (`approve` → chosen rows `approved`, other open rows `not_approved`; `reject` → `revising`, revision +1; `kill` → `killed`; `confirm_tone` → `held_tone` rows `approved`; `mark_manual_done` → row `posted_manual` with `postedAt`).
-- **Real mode**: no optimistic flip. The card shows "Approving… / Sending back… / Killing… / Confirming tone… / Marking posted…" (stored as `pendingAction { action, at, payload }`) until n8n posts the new state back. After 10 minutes it turns amber ("No response from n8n yet") with **Retry**. Example data is hidden unless `CONTENT_REVIEW_MOCK_SEED=1`.
+- **Mock mode** (no `N8N_REVIEW_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET`): EXAMPLE packages are seeded and actions apply instantly to the local cache (`approve` → chosen rows `approved`, other open rows `not_approved`; `reject` → `revising`, revision +1; `kill` → `killed`; `confirm_tone` → `held_tone` rows `approved`; `mark_manual_done` → row `posted_manual` with `postedAt`; `mark_stale` → `out_of_date`; `pick_title` → youtube `approved` with that title).
+- **Real mode**: no optimistic flip. The card shows "Approving… / Sending back… / Killing… / Confirming tone… / Marking posted… / Marking out of date… / Using title…" (stored as `pendingAction { action, at, payload }`) until n8n posts the new state back. After 10 minutes it turns amber ("No response from n8n yet") with **Retry**. Example data is hidden unless `CONTENT_REVIEW_MOCK_SEED=1`.
 - **Storage**: Upstash Redis hash `pt:content-review:v2:packages` in production, `pt:content-review:<VERCEL_ENV>:v2:packages` elsewhere (preview/local never write production review data). Falls back to memory without Redis.
 - **Passcode**: set `REVIEW_ADMIN_PASSWORD` (and optionally `REVIEW_SESSION_SECRET`) to gate `/review` and the review APIs via `src/middleware.ts`. Without it the page shows an "Unprotected" banner.

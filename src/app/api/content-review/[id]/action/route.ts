@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import type {
   ContentHistoryEntry,
   ContentPackage,
+  PlatformCopy,
   PlatformId,
   ReviewActionPayload,
   ReviewActionRequest,
   ReviewStage,
 } from "@/lib/content-review-types";
 import { getPackage, reviewMode, savePackage } from "@/lib/content-review-store";
-import { platformStatus, validateAction } from "@/lib/content-review-rules";
+import { platformStatus, validateAction, youtubeTitleOptions } from "@/lib/content-review-rules";
 import { requestHasReviewAccess } from "@/lib/review-session";
 import { forwardToN8n } from "@/lib/review-webhook";
 
@@ -20,26 +21,24 @@ function uniq<T>(xs: T[] | undefined): T[] {
 }
 
 function historyEntry(pkg: ContentPackage, payload: ReviewActionPayload): ContentHistoryEntry {
-  if (payload.action === "mark_manual_done") {
-    return {
-      revision: pkg.revision,
-      action: payload.action,
-      stages: [],
-      platforms: [payload.platform],
-      feedback: "Finished by hand in the app",
-      actor: payload.actor,
-      at: payload.at,
-    };
+  const base = { revision: pkg.revision, action: payload.action, actor: payload.actor, at: payload.at };
+  switch (payload.action) {
+    case "confirm_tone":
+      return { ...base, stages: [], platforms: [], feedback: "Tone and CTA confirmed" };
+    case "mark_manual_done":
+      return { ...base, stages: [], platforms: [payload.platform], feedback: "Finished by hand in the app" };
+    case "mark_stale":
+      return { ...base, stages: [], platforms: [payload.platform], feedback: "Marked out of date (won't release)" };
+    case "pick_title":
+      return {
+        ...base,
+        stages: [],
+        platforms: ["youtube"],
+        feedback: `Picked title option ${payload.titleIndex + 1}: ${youtubeTitleOptions(pkg)[payload.titleIndex] ?? ""}`,
+      };
+    default:
+      return { ...base, stages: payload.stages, platforms: payload.platforms, feedback: payload.feedback };
   }
-  return {
-    revision: pkg.revision,
-    action: payload.action,
-    stages: payload.action === "confirm_tone" ? [] : payload.stages,
-    platforms: payload.action === "confirm_tone" ? [] : payload.platforms,
-    feedback: payload.action === "confirm_tone" ? "Tone and CTA confirmed" : payload.feedback,
-    actor: payload.actor,
-    at: payload.at,
-  };
 }
 
 /** MOCK mode only: apply the action straight to the local display cache. */
@@ -50,82 +49,90 @@ function applyMock(pkg: ContentPackage, payload: ReviewActionPayload): ContentPa
     history: [...pkg.history, historyEntry(pkg, payload)],
     updatedAt: payload.at,
     pendingAction: null,
+    lastError: null,
+  };
+  const setRow = (id: PlatformId, patch: Partial<PlatformCopy>) => {
+    next.platforms = next.platforms.map((p) => (p.platform === id ? ({ ...p, ...patch } as PlatformCopy) : p));
   };
 
-  if (payload.action === "approve") {
-    const chosen = new Set<PlatformId>(payload.platforms);
-    next.platforms = next.platforms.map((p) => {
-      const cur = platformStatus(pkg, p);
-      if (cur !== "review") return p; // rows already decided (e.g. via the sheet) stay as they are
-      return { ...p, status: chosen.has(p.platform) ? "approved" : "not_approved" };
-    });
-    if (payload.toneChecked) next.toneCheckedRevision = pkg.revision;
-    if (payload.selectedTitle) {
-      next.platforms = next.platforms.map((p) =>
-        p.platform === "youtube" ? { ...p, title: payload.selectedTitle, selectedTitle: payload.selectedTitle } : p
-      );
+  switch (payload.action) {
+    case "approve": {
+      const chosen = new Set<PlatformId>(payload.platforms);
+      next.platforms = next.platforms.map((p) => {
+        if (platformStatus(pkg, p) !== "review") return p; // rows already decided (e.g. via the sheet) stay
+        return { ...p, status: chosen.has(p.platform) ? "approved" : "not_approved" };
+      });
+      if (payload.toneChecked) next.toneCheckedRevision = pkg.revision;
+      if (payload.selectedTitle) setRow("youtube", { title: payload.selectedTitle, selectedTitle: payload.selectedTitle } as Partial<PlatformCopy>);
+      next.status = next.platforms.some((p) => p.status === "approved") ? "approved" : pkg.status;
+      break;
     }
-    next.status = next.platforms.some((p) => p.status === "approved") ? "approved" : pkg.status;
-  } else if (payload.action === "reject") {
-    // In real mode n8n owns revision numbers and posts the new package back.
-    next.status = "revising";
-    next.revision = pkg.revision + 1;
-    next.revisionCount = pkg.revisionCount + 1;
-    next.toneCheckedRevision = null; // new revision → tone tick resets
-    next.platforms = next.platforms.map((p) => ({ ...p, status: "review" }));
-  } else if (payload.action === "kill") {
-    next.status = "killed";
-    next.platforms = next.platforms.map((p) =>
-      ["posted", "scheduled"].includes(platformStatus(pkg, p)) ? p : { ...p, status: "killed" }
-    );
-  } else if (payload.action === "mark_manual_done") {
-    next.platforms = next.platforms.map((p) =>
-      p.platform === payload.platform
-        ? { ...p, status: "posted_manual", postedAt: payload.at, postedRevision: pkg.revision }
-        : p
-    );
-  } else {
-    // confirm_tone: tone ticked for this revision; held rows are released.
-    next.toneCheckedRevision = pkg.revision;
-    next.platforms = next.platforms.map((p) =>
-      platformStatus(pkg, p) === "held_tone" ? { ...p, status: "approved" } : p
-    );
+    case "reject":
+      // In real mode n8n owns revision numbers and posts the new package back.
+      next.status = "revising";
+      next.revision = pkg.revision + 1;
+      next.revisionCount = pkg.revisionCount + 1;
+      next.toneCheckedRevision = null; // new revision → tone tick resets
+      next.platforms = next.platforms.map((p) => ({ ...p, status: "review" }));
+      break;
+    case "kill":
+      next.status = "killed";
+      next.platforms = next.platforms.map((p) =>
+        ["posted", "scheduled", "posted_manual"].includes(platformStatus(pkg, p)) ? p : { ...p, status: "killed" }
+      );
+      break;
+    case "mark_manual_done":
+      setRow(payload.platform, { status: "posted_manual", postedAt: payload.at, postedRevision: pkg.revision });
+      break;
+    case "mark_stale":
+      setRow(payload.platform, { status: "out_of_date" });
+      break;
+    case "pick_title": {
+      const title = youtubeTitleOptions(pkg)[payload.titleIndex];
+      setRow("youtube", { status: "approved", title, selectedTitle: title } as Partial<PlatformCopy>);
+      break;
+    }
+    case "confirm_tone":
+      // Tone ticked for this revision; held rows are released.
+      next.toneCheckedRevision = pkg.revision;
+      next.platforms = next.platforms.map((p) =>
+        platformStatus(pkg, p) === "held_tone" ? { ...p, status: "approved" } : p
+      );
+      break;
   }
   return next;
 }
 
 function buildPayload(pkg: ContentPackage, body: ReviewActionRequest): ReviewActionPayload {
   const at = new Date().toISOString();
-  if (body.action === "mark_manual_done") {
-    return {
-      action: "mark_manual_done",
-      packageId: pkg.packageId,
-      revision: pkg.revision,
-      platform: body.platform!,
-      actor: "founder",
-      at,
-    };
-  }
-  if (body.action === "confirm_tone") {
-    return { action: "confirm_tone", packageId: pkg.packageId, revision: pkg.revision, toneChecked: true, actor: "founder", at };
-  }
-  const payload: ReviewActionPayload = {
-    action: body.action,
-    packageId: pkg.packageId,
-    revision: pkg.revision,
-    platforms: uniq<PlatformId>(body.platforms),
-    stages: body.action === "reject" ? uniq<ReviewStage>(body.stages) : [],
-    feedback: body.action === "reject" ? String(body.feedback ?? "").trim().slice(0, 4000) : "",
-    actor: "founder",
-    at,
-  };
-  if (body.action === "approve") {
-    payload.toneChecked = body.toneChecked === true;
-    if (payload.platforms.includes("youtube") && typeof body.selectedTitle === "string" && body.selectedTitle) {
-      payload.selectedTitle = body.selectedTitle;
+  const common = { packageId: pkg.packageId, revision: pkg.revision };
+  switch (body.action) {
+    case "mark_manual_done":
+    case "mark_stale":
+      return { action: body.action, ...common, platform: body.platform!, actor: "founder", at };
+    case "pick_title":
+      return { action: "pick_title", ...common, platform: "youtube", titleIndex: body.titleIndex!, actor: "founder", at };
+    case "confirm_tone":
+      return { action: "confirm_tone", ...common, toneChecked: true, actor: "founder", at };
+    default: {
+      const payload: ReviewActionPayload = {
+        action: body.action,
+        ...common,
+        platforms: uniq<PlatformId>(body.platforms),
+        stages: body.action === "reject" ? uniq<ReviewStage>(body.stages) : [],
+        feedback: body.action === "reject" ? String(body.feedback ?? "").trim().slice(0, 4000) : "",
+        actor: "founder",
+        at,
+      };
+      if (body.action === "approve") {
+        payload.toneChecked = body.toneChecked === true;
+        if (payload.platforms.includes("youtube") && typeof body.selectedTitle === "string" && body.selectedTitle) {
+          payload.selectedTitle = body.selectedTitle;
+        }
+      }
+      return payload;
     }
   }
-  return payload;
 }
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
@@ -167,7 +174,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       );
     }
     const attempt = (pa.attempts ?? 1) + 1;
-    const fwd = await forwardToN8n(pa.payload, { attempt });
+    const fwd = await forwardToN8n(pa.payload, { attempt, rawBody: pa.rawBody });
     if (!fwd.ok) return NextResponse.json({ error: fwd.error }, { status: fwd.status });
     const updated = await savePackage({
       ...pkg,
@@ -198,8 +205,16 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   // n8n writes the sheet and posts the new state back to POST /api/content-review.
   const updated = await savePackage({
     ...pkg,
+    lastError: null,
     history: [...pkg.history, historyEntry(pkg, payload)],
-    pendingAction: { action: payload.action, at: payload.at, lastSentAt: payload.at, attempts: 1, payload },
+    pendingAction: {
+      action: payload.action,
+      at: payload.at,
+      lastSentAt: payload.at,
+      attempts: 1,
+      payload,
+      rawBody: fwd.rawBody,
+    },
   });
   return NextResponse.json({ ok: true, mock: false, pending: true, package: updated });
 }
