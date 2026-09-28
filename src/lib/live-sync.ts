@@ -1,4 +1,5 @@
 import type { LiveSyncState } from "@/types";
+import { formatLondonClock } from "./freshness";
 
 /**
  * Pure live-sync state machine for the 5s status poll.
@@ -18,6 +19,12 @@ export const POLL_MS = 5_000;
 export const OFFLINE_AFTER_FAILURES = 3;
 /** Abort a poll that hangs this long (counts as one failure). */
 export const POLL_TIMEOUT_MS = 8_000;
+/**
+ * Once truly offline (>= OFFLINE_AFTER_FAILURES), dim agent cards when the
+ * last successful sync is at least this old. Visual only — statuses/chips
+ * are never changed.
+ */
+export const OFFLINE_DIM_AFTER_MS = 120_000;
 
 export const DEFAULT_LIVE_SYNC: LiveSyncState = {
   mode: "idle",
@@ -128,4 +135,46 @@ export function formatSyncedAgo(
   const mins = Math.floor(sec / 60);
   if (mins < 60) return `Last synced ${mins}m ago`;
   return `Last synced ${Math.floor(mins / 60)}h ago`;
+}
+
+/**
+ * Truly offline: at least OFFLINE_AFTER_FAILURES failed polls since the last
+ * success. Unlike `mode`, this stays true while a visibility refetch is in
+ * flight (mode shows "reconnecting" then), so dimming doesn't blink.
+ */
+export function isTrulyOffline(
+  state: Pick<LiveSyncState, "consecutiveFailures">
+): boolean {
+  return state.consecutiveFailures >= OFFLINE_AFTER_FAILURES;
+}
+
+type DimInput = Pick<LiveSyncState, "consecutiveFailures" | "receivedAt">;
+
+/**
+ * Client time (ms) at which cards dim, or null when dimming doesn't apply
+ * (not truly offline, or nothing synced this session).
+ */
+export function offlineDimAt(state: DimInput): number | null {
+  if (!isTrulyOffline(state) || state.receivedAt == null) return null;
+  return state.receivedAt + OFFLINE_DIM_AFTER_MS;
+}
+
+/** Milliseconds until cards should dim (0 = dim now), or null. */
+export function offlineDimDelayMs(state: DimInput, now = Date.now()): number | null {
+  const at = offlineDimAt(state);
+  return at == null ? null : Math.max(0, at - now);
+}
+
+export function isOfflineDimmed(state: DimInput, now = Date.now()): boolean {
+  return offlineDimDelayMs(state, now) === 0;
+}
+
+/** "Showing data from 18:42" (Europe/London) for the last good snapshot. */
+export function formatShowingDataFrom(
+  state: Pick<LiveSyncState, "snapshotAt" | "receivedAt">,
+  now = Date.now()
+): string | null {
+  const at = state.snapshotAt ?? state.receivedAt;
+  if (at == null) return null;
+  return `Showing data from ${formatLondonClock(at, now)}`;
 }

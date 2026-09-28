@@ -5,15 +5,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useOps } from "@/lib/store";
 import {
   derivePresence,
-  displayNow,
-  formatUpdatedAgo,
+  formatAgentUpdated,
   isLiveDot,
 } from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
 
 /** Compact agent cards for Overview — relative time, presence, live dot. */
 export function OverviewAgents() {
-  const { agents, hydrated, freshness } = useOps();
+  const { agents, hydrated, freshness, offlineDim } = useOps();
   const [, setTick] = useState(0);
 
   // Display-only tick so "Updated Xs ago" moves between polls. Presence and
@@ -67,7 +67,10 @@ export function OverviewAgents() {
           <p className="text-xs text-ink-500">Waiting for first heartbeat</p>
         )}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-3 ${offlineDimClass(offlineDim.dimmed)}`}
+        data-offline-dimmed={offlineDim.dimmed || undefined}
+      >
         {sorted.map(({ agent, presence }) => {
           const live = isLiveDot(agent, freshness);
           const attention =
@@ -105,10 +108,7 @@ export function OverviewAgents() {
                 </p>
               )}
               <p className="mt-2 text-xs text-ink-500">
-                {formatUpdatedAgo(
-                  agent.heartbeatAt || agent.lastUpdate,
-                  displayNow(freshness)
-                )}
+                {formatAgentUpdated(agent, freshness)}
               </p>
             </Link>
           );

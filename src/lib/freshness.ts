@@ -34,6 +34,11 @@ export interface FreshnessRef {
   receivedAt: number | null;
   /** Waiting on a first / visibility refetch — never mark stale/offline. */
   suppressStale: boolean;
+  /**
+   * Truly offline (3+ failed polls). Relative "Updated Xs ago" text would
+   * imply freshness, so agent times are shown as a UK clock time instead.
+   */
+  offline?: boolean;
 }
 
 /**
@@ -131,6 +136,44 @@ export function formatUpdatedAgo(iso: string | null | undefined, now = Date.now(
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `Updated ${hours}h ago`;
   return `Updated ${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * UK clock time (Europe/London) — "18:42", or "27 Sep, 18:42" when not today
+ * in London.
+ */
+export function formatLondonClock(ms: number, now = Date.now()): string {
+  const d = new Date(ms);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+  if (londonDayKey(d) === londonDayKey(new Date(now))) return time;
+  const day = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    day: "numeric",
+    month: "short",
+  }).format(d);
+  return `${day}, ${time}`;
+}
+
+/**
+ * Card "Updated …" line. Live: relative to the snapshot (capped tick).
+ * Truly offline: the heartbeat's UK clock time, so nothing implies freshness.
+ */
+export function formatAgentUpdated(
+  agent: Agent,
+  ref?: FreshnessRef,
+  now = Date.now()
+): string {
+  const iso = agent.heartbeatAt || agent.lastUpdate;
+  if (ref?.offline && iso) {
+    const t = new Date(iso).getTime();
+    if (Number.isFinite(t)) return `Updated at ${formatLondonClock(t, now)}`;
+  }
+  return formatUpdatedAgo(iso, displayNow(ref, now));
 }
 
 /** Europe/London calendar day key for "done today" */

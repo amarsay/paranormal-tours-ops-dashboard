@@ -3,9 +3,10 @@
 import { useMemo } from "react";
 import { useOps } from "@/lib/store";
 import { derivePresence, isSameLondonDay } from "@/lib/freshness";
+import { offlineDimClass } from "./offline-dim";
 
 export function KpiStrip() {
-  const { agents, tasks, freshness } = useOps();
+  const { agents, tasks, freshness, offlineDim } = useOps();
 
   const kpis = useMemo(() => {
     let activeNow = 0;
@@ -66,7 +67,9 @@ export function KpiStrip() {
   }, [agents, tasks, freshness]);
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div
+      className={`grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 ${offlineDimClass(offlineDim.dimmed)}`}
+    >
       {kpis.map((item) => (
         <div
           key={item.label}

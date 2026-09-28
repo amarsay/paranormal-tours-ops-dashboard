@@ -124,6 +124,14 @@ Dashboard polls GET every **5s**. Live JSON **wins** over localStorage for statu
 - Returning to the tab (`visibilitychange` → visible) refetches immediately;
   stale/offline marking is suppressed until that refetch resolves.
 - “Last synced Ns ago” shows how long since the last successful poll.
+- After ~2 min truly offline (3+ failed polls; measured from the last
+  successful sync, `OFFLINE_DIM_AFTER_MS` in `src/lib/live-sync.ts`) agent
+  cards dim (visual only — chips/statuses unchanged) and a banner shows
+  “Showing data from HH:MM (UK)”. While offline, card times read
+  “Updated at HH:MM” instead of “Xs ago”. Cleared on the next successful poll.
+- Phones: a compact coloured status pill sits in the header, plus a thin
+  Reconnecting/Offline banner with “Last synced …”; the nav wraps to its own
+  row so all tabs fit at 360px.
 
 ## Mock stream (no Spectre / Upstash)
 

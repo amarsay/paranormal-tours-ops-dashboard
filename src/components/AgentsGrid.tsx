@@ -8,16 +8,16 @@ import { SQUADS } from "@/lib/seed";
 import type { PresenceStatus } from "@/types";
 import {
   derivePresence,
-  displayNow,
-  formatUpdatedAgo,
+  formatAgentUpdated,
   isLiveDot,
 } from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
 
 const STATUSES: PresenceStatus[] = ["idle", "working", "blocked", "review", "done", "failed", "stale", "offline"];
 
 export function AgentsGrid() {
-  const { agents, hydrated, freshness } = useOps();
+  const { agents, hydrated, freshness, offlineDim } = useOps();
   const params = useSearchParams();
   const initialSquad = params.get("squad") ?? "all";
   const [query, setQuery] = useState("");
@@ -82,7 +82,10 @@ export function AgentsGrid() {
         Showing {filtered.length} of {agents.length} agents
       </p>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-3 ${offlineDimClass(offlineDim.dimmed)}`}
+        data-offline-dimmed={offlineDim.dimmed || undefined}
+      >
         {filtered.map((agent) => (
           <Link
             key={agent.id}
@@ -108,10 +111,7 @@ export function AgentsGrid() {
               {agent.currentTask ?? "No current task"}
             </p>
             <p className="mt-2 text-xs text-ink-500">
-              {formatUpdatedAgo(
-                agent.heartbeatAt || agent.lastUpdate,
-                displayNow(freshness)
-              )}
+              {formatAgentUpdated(agent, freshness)}
             </p>
           </Link>
         ))}

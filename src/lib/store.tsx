@@ -31,6 +31,9 @@ import { normaliseTaskState } from "./live-types";
 import type { FreshnessRef } from "./freshness";
 import {
   DEFAULT_LIVE_SYNC,
+  formatShowingDataFrom,
+  isTrulyOffline,
+  offlineDimAt,
   POLL_MS,
   POLL_TIMEOUT_MS,
   reduceLiveSync,
@@ -56,6 +59,11 @@ interface OpsContextValue extends OpsState {
   setLiveSync: (patch: Partial<LiveSyncState>) => void;
   /** Snapshot-relative clock for derivePresence / isLiveDot / displayNow */
   freshness: FreshnessRef;
+  /**
+   * Visual-only offline cue: `dimmed` once truly offline and the last good
+   * sync is OFFLINE_DIM_AFTER_MS old; `dataFrom` = "Showing data from HH:MM".
+   */
+  offlineDim: { dimmed: boolean; dataFrom: string | null };
 }
 
 const DEFAULT_LIVE: LiveSyncState = DEFAULT_LIVE_SYNC;
@@ -546,15 +554,48 @@ export function OpsProvider({
   }, [roster]);
 
   const { snapshotAt, receivedAt, suppressStale } = state.liveSync;
+  const offline = isTrulyOffline(state.liveSync);
   const freshness = useMemo<FreshnessRef>(
-    () => ({ snapshotAt, receivedAt, suppressStale }),
-    [snapshotAt, receivedAt, suppressStale]
+    () => ({ snapshotAt, receivedAt, suppressStale, offline }),
+    [snapshotAt, receivedAt, suppressStale, offline]
+  );
+
+  // Flip `dimmed` with a single timer at receivedAt + OFFLINE_DIM_AFTER_MS
+  // (no per-second re-render of the tree). Any success clears it at once.
+  const dimAt = offlineDimAt(state.liveSync);
+  const [dimmed, setDimmed] = useState(false);
+  useEffect(() => {
+    if (dimAt == null) {
+      setDimmed(false);
+      return;
+    }
+    const delay = dimAt - Date.now();
+    if (delay <= 0) {
+      setDimmed(true);
+      return;
+    }
+    setDimmed(false);
+    const t = setTimeout(() => setDimmed(true), delay);
+    return () => clearTimeout(t);
+  }, [dimAt]);
+  // `dimAt == null` (e.g. a poll just succeeded) clears dimming in the same
+  // render, before the effect catches up.
+  const isDimmed = dimmed && dimAt != null;
+  const offlineDim = useMemo(
+    () => ({
+      dimmed: isDimmed,
+      dataFrom: isDimmed
+        ? formatShowingDataFrom({ snapshotAt, receivedAt })
+        : null,
+    }),
+    [isDimmed, snapshotAt, receivedAt]
   );
 
   const value = useMemo(
     () => ({
       ...state,
       freshness,
+      offlineDim,
       assignTask,
       updateTaskStatus,
       setAgentStatus,
@@ -567,6 +608,7 @@ export function OpsProvider({
     [
       state,
       freshness,
+      offlineDim,
       assignTask,
       updateTaskStatus,
       setAgentStatus,

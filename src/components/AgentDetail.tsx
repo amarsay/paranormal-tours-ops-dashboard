@@ -5,12 +5,12 @@ import { FormEvent, useState } from "react";
 import { formatRelative, useOps } from "@/lib/store";
 import {
   derivePresence,
-  displayNow,
-  formatUpdatedAgo,
+  formatAgentUpdated,
   isLiveDot,
 } from "@/lib/freshness";
 import type { AgentStatus } from "@/types";
 import { AgentStatusChip, LiveDot, TaskStatusChip } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
 
 export function AgentDetail({ slug }: { slug: string }) {
   const {
@@ -19,6 +19,7 @@ export function AgentDetail({ slug }: { slug: string }) {
     activity,
     hydrated,
     freshness,
+    offlineDim,
     assignTask,
     setAgentStatus,
     addAgentNote,
@@ -78,16 +79,15 @@ export function AgentDetail({ slug }: { slug: string }) {
             {agent.squad}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div
+          className={`flex flex-col items-end gap-2 ${offlineDimClass(offlineDim.dimmed)}`}
+        >
           <div className="flex items-center gap-2">
             <LiveDot live={isLiveDot(agent, freshness)} />
             <AgentStatusChip status={derivePresence(agent, freshness)} />
           </div>
           <p className="text-xs text-ink-500">
-            {formatUpdatedAgo(
-              agent.heartbeatAt || agent.lastUpdate,
-              displayNow(freshness)
-            )}
+            {formatAgentUpdated(agent, freshness)}
           </p>
         </div>
       </div>

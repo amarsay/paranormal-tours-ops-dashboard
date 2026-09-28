@@ -5,10 +5,11 @@ import { useMemo } from "react";
 import { useOps } from "@/lib/store";
 import { derivePresence } from "@/lib/freshness";
 import { AgentStatusChip } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
 
 /** Founder job queue: blocked + review only (Needs you). */
 export function AttentionStrip() {
-  const { agents, hydrated, freshness } = useOps();
+  const { agents, hydrated, freshness, offlineDim } = useOps();
 
   const needsYou = useMemo(() => {
     return agents
@@ -46,7 +47,7 @@ export function AttentionStrip() {
         </h2>
         <p className="text-xs text-ink-500">{needsYou.length} item(s)</p>
       </div>
-      <ul className="space-y-2">
+      <ul className={`space-y-2 ${offlineDimClass(offlineDim.dimmed)}`}>
         {needsYou.map(({ agent, presence }) => {
           const isReview = presence === "review";
           const cta = isReview ? "Review" : "Unblock";
