@@ -3,6 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { formatSyncedAgo } from "@/lib/live-sync";
 import { useOps } from "@/lib/store";
 
 const links = [
@@ -15,29 +17,66 @@ const links = [
 function LiveIndicator() {
   const { liveSync } = useOps();
   const mode = liveSync?.mode ?? "idle";
+  const [now, setNow] = useState(() => Date.now());
+
+  // Display-only 1s tick for "Last synced Ns ago" (doesn't affect staleness).
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   let label = "Live sync off";
   let className = "text-ink-500 ring-white/10";
+  let dot = "";
   if (mode === "live") {
     label = "Live · 5s";
     className = "text-teal-200 ring-teal-400/30 bg-teal-500/10";
+    dot = "animate-pulse bg-teal-400";
   } else if (mode === "polling") {
     label = "Polling…";
     className = "text-violet-200 ring-violet-400/30 bg-violet-500/10";
+  } else if (mode === "reconnecting") {
+    label = "Reconnecting…";
+    className = "text-violet-200 ring-violet-400/30 bg-violet-500/10";
+    dot = "bg-violet-400";
   } else if (mode === "offline") {
     label = "Offline";
     className = "text-amber-200 ring-amber-400/30 bg-amber-500/10";
+    dot = "bg-amber-400";
   }
+
+  const synced = formatSyncedAgo(liveSync?.receivedAt ?? null, now);
+  const title = [
+    liveSync?.error
+      ? `${liveSync.error}${
+          liveSync.consecutiveFailures
+            ? ` (${liveSync.consecutiveFailures} failed poll${
+                liveSync.consecutiveFailures === 1 ? "" : "s"
+              })`
+            : ""
+        }`
+      : null,
+    liveSync?.storage ? `storage: ${liveSync.storage}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <span
-      className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 sm:inline-flex ${className}`}
-      title={liveSync?.error ?? liveSync?.storage ?? undefined}
+      id="live-indicator"
+      className={`hidden items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 sm:inline-flex ${className}`}
+      title={title || undefined}
     >
-      {mode === "live" && (
-        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal-400" />
-      )}
+      {dot && <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
       {label}
+      {liveSync?.receivedAt != null && (
+        <span
+          id="live-last-synced"
+          className="font-normal tabular-nums opacity-80"
+        >
+          · {synced}
+        </span>
+      )}
     </span>
   );
 }

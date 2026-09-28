@@ -5,7 +5,7 @@ import { useOps } from "@/lib/store";
 import { derivePresence, isSameLondonDay } from "@/lib/freshness";
 
 export function KpiStrip() {
-  const { agents, tasks } = useOps();
+  const { agents, tasks, freshness } = useOps();
 
   const kpis = useMemo(() => {
     let activeNow = 0;
@@ -15,7 +15,7 @@ export function KpiStrip() {
     let doneToday = 0;
 
     for (const a of agents) {
-      const p = derivePresence(a);
+      const p = derivePresence(a, freshness);
       if (p === "working") activeNow += 1;
       if (p === "blocked" || p === "review" || p === "failed") needsYou += 1;
       if (p === "working" || p === "blocked" || p === "review") inFlight += 1;
@@ -63,7 +63,7 @@ export function KpiStrip() {
         attention: staleOffline > 0,
       },
     ];
-  }, [agents, tasks]);
+  }, [agents, tasks, freshness]);
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

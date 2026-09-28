@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOps } from "@/lib/store";
 import {
   derivePresence,
+  displayNow,
   formatUpdatedAgo,
   isLiveDot,
 } from "@/lib/freshness";
@@ -12,9 +13,11 @@ import { AgentStatusChip, LiveDot } from "./StatusChip";
 
 /** Compact agent cards for Overview — relative time, presence, live dot. */
 export function OverviewAgents() {
-  const { agents, hydrated } = useOps();
+  const { agents, hydrated, freshness } = useOps();
   const [, setTick] = useState(0);
 
+  // Display-only tick so "Updated Xs ago" moves between polls. Presence and
+  // staleness are measured against the snapshot (freshness), not this tick.
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 5000);
     return () => clearInterval(id);
@@ -31,13 +34,13 @@ export function OverviewAgents() {
       return 5;
     };
     return [...agents]
-      .map((a) => ({ agent: a, presence: derivePresence(a) }))
+      .map((a) => ({ agent: a, presence: derivePresence(a, freshness) }))
       .sort((a, b) => {
         const d = rank(a.presence) - rank(b.presence);
         if (d !== 0) return d;
         return a.agent.name.localeCompare(b.agent.name);
       });
-  }, [agents]);
+  }, [agents, freshness]);
 
   if (!hydrated) {
     return (
@@ -66,7 +69,7 @@ export function OverviewAgents() {
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {sorted.map(({ agent, presence }) => {
-          const live = isLiveDot(agent);
+          const live = isLiveDot(agent, freshness);
           const attention =
             presence === "blocked" ||
             presence === "review" ||
@@ -102,7 +105,10 @@ export function OverviewAgents() {
                 </p>
               )}
               <p className="mt-2 text-xs text-ink-500">
-                {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+                {formatUpdatedAgo(
+                  agent.heartbeatAt || agent.lastUpdate,
+                  displayNow(freshness)
+                )}
               </p>
             </Link>
           );

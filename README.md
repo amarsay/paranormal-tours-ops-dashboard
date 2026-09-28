@@ -111,6 +111,19 @@ Dashboard polls GET every **5s**. Live JSON **wins** over localStorage for statu
 - Stale: miss >90s (active) / >5m (idle)
 - `done` pulses ~60s then idle; `failed` stays until new task
 - `offline`: never checked in via live
+- Ages are measured against the **snapshot** (server `Date` header of the poll
+  response, falling back to fetch-completed time), not the browser's render
+  clock — so a throttled background tab can't push agents past 90s/5m between
+  polls. “Updated Xs ago” may tick forward up to 10s between polls (display only).
+
+### Live sync indicator (header)
+
+- One failed poll keeps the last good snapshot and shows **Reconnecting…**;
+  the board shows **Offline** only after **3 consecutive** failed polls (a poll
+  that hangs >8s counts as failed). Any success resets the counter.
+- Returning to the tab (`visibilitychange` → visible) refetches immediately;
+  stale/offline marking is suppressed until that refetch resolves.
+- “Last synced Ns ago” shows how long since the last successful poll.
 
 ## Mock stream (no Spectre / Upstash)
 

@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { formatRelative, useOps } from "@/lib/store";
-import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
+import {
+  derivePresence,
+  displayNow,
+  formatUpdatedAgo,
+  isLiveDot,
+} from "@/lib/freshness";
 import type { AgentStatus } from "@/types";
 import { AgentStatusChip, LiveDot, TaskStatusChip } from "./StatusChip";
 
@@ -13,6 +18,7 @@ export function AgentDetail({ slug }: { slug: string }) {
     tasks,
     activity,
     hydrated,
+    freshness,
     assignTask,
     setAgentStatus,
     addAgentNote,
@@ -74,11 +80,14 @@ export function AgentDetail({ slug }: { slug: string }) {
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
-            <LiveDot live={isLiveDot(agent)} />
-            <AgentStatusChip status={derivePresence(agent)} />
+            <LiveDot live={isLiveDot(agent, freshness)} />
+            <AgentStatusChip status={derivePresence(agent, freshness)} />
           </div>
           <p className="text-xs text-ink-500">
-            {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+            {formatUpdatedAgo(
+              agent.heartbeatAt || agent.lastUpdate,
+              displayNow(freshness)
+            )}
           </p>
         </div>
       </div>

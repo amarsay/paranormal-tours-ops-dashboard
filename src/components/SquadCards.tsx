@@ -7,13 +7,13 @@ import { derivePresence } from "@/lib/freshness";
 import { AgentStatusChip } from "./StatusChip";
 
 export function SquadCards() {
-  const { agents } = useOps();
+  const { agents, freshness } = useOps();
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
       {SQUADS.map((squad) => {
         const members = agents.filter((a) => a.squad === squad);
-        const working = members.filter((a) => derivePresence(a) === "working").length;
+        const working = members.filter((a) => derivePresence(a, freshness) === "working").length;
         return (
           <div key={squad} className="card p-4">
             <div className="mb-3 flex items-start justify-between gap-2">
@@ -45,7 +45,7 @@ export function SquadCards() {
                       {agent.role}
                     </span>
                   </Link>
-                  <AgentStatusChip status={derivePresence(agent)} />
+                  <AgentStatusChip status={derivePresence(agent, freshness)} />
                 </li>
               ))}
               {members.length > 5 && (

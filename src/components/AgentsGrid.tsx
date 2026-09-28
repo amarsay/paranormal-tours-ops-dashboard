@@ -6,13 +6,18 @@ import { useSearchParams } from "next/navigation";
 import { useOps } from "@/lib/store";
 import { SQUADS } from "@/lib/seed";
 import type { PresenceStatus } from "@/types";
-import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
+import {
+  derivePresence,
+  displayNow,
+  formatUpdatedAgo,
+  isLiveDot,
+} from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
 
 const STATUSES: PresenceStatus[] = ["idle", "working", "blocked", "review", "done", "failed", "stale", "offline"];
 
 export function AgentsGrid() {
-  const { agents, hydrated } = useOps();
+  const { agents, hydrated, freshness } = useOps();
   const params = useSearchParams();
   const initialSquad = params.get("squad") ?? "all";
   const [query, setQuery] = useState("");
@@ -23,7 +28,7 @@ export function AgentsGrid() {
     const q = query.trim().toLowerCase();
     return agents.filter((a) => {
       if (squad !== "all" && a.squad !== squad) return false;
-      if (status !== "all" && derivePresence(a) !== status) return false;
+      if (status !== "all" && derivePresence(a, freshness) !== status) return false;
       if (!q) return true;
       return (
         a.name.toLowerCase().includes(q) ||
@@ -32,7 +37,7 @@ export function AgentsGrid() {
         (a.currentTask ?? "").toLowerCase().includes(q)
       );
     });
-  }, [agents, query, squad, status]);
+  }, [agents, query, squad, status, freshness]);
 
   if (!hydrated) {
     return <div className="card p-6 text-sm text-ink-400">Loading agents…</div>;
@@ -90,11 +95,11 @@ export function AgentsGrid() {
                   <h3 className="font-semibold text-ink-50 group-hover:text-violet-100">
                     {agent.name}
                   </h3>
-                  <LiveDot live={isLiveDot(agent)} />
+                  <LiveDot live={isLiveDot(agent, freshness)} />
                 </div>
                 <p className="text-xs text-ink-400">{agent.role}</p>
               </div>
-              <AgentStatusChip status={derivePresence(agent)} />
+              <AgentStatusChip status={derivePresence(agent, freshness)} />
             </div>
             <p className="mt-3 text-xs uppercase tracking-wider text-ink-500">
               {agent.squad}
@@ -103,7 +108,10 @@ export function AgentsGrid() {
               {agent.currentTask ?? "No current task"}
             </p>
             <p className="mt-2 text-xs text-ink-500">
-              {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+              {formatUpdatedAgo(
+                agent.heartbeatAt || agent.lastUpdate,
+                displayNow(freshness)
+              )}
             </p>
           </Link>
         ))}

@@ -98,12 +98,26 @@ export interface OpsState {
   liveSync: LiveSyncState;
 }
 
-export type LiveSyncMode = "live" | "polling" | "offline" | "idle";
+export type LiveSyncMode =
+  | "live"
+  | "polling"
+  | "reconnecting"
+  | "offline"
+  | "idle";
 
 export interface LiveSyncState {
   mode: LiveSyncMode;
+  /** ISO time of the last successful poll (client clock) */
   lastFetchAt: string | null;
   storage: "redis" | "memory" | null;
   error: string | null;
   schemaVersion: number | null;
+  /** Failed polls since the last success (offline after 3) */
+  consecutiveFailures: number;
+  /** Server clock (ms) of the last good snapshot — staleness reference */
+  snapshotAt: number | null;
+  /** Client Date.now() when the last good snapshot arrived */
+  receivedAt: number | null;
+  /** True while waiting on a first / visibility refetch: no stale marking */
+  suppressStale: boolean;
 }

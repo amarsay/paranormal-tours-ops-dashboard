@@ -8,11 +8,11 @@ import { AgentStatusChip } from "./StatusChip";
 
 /** Founder job queue: blocked + review only (Needs you). */
 export function AttentionStrip() {
-  const { agents, hydrated } = useOps();
+  const { agents, hydrated, freshness } = useOps();
 
   const needsYou = useMemo(() => {
     return agents
-      .map((a) => ({ agent: a, presence: derivePresence(a) }))
+      .map((a) => ({ agent: a, presence: derivePresence(a, freshness) }))
       .filter(
         ({ presence }) =>
           presence === "blocked" ||
@@ -24,7 +24,7 @@ export function AttentionStrip() {
           p === "failed" ? 0 : p === "blocked" ? 1 : 2;
         return rank(a.presence) - rank(b.presence);
       });
-  }, [agents]);
+  }, [agents, freshness]);
 
   if (!hydrated) return null;
 
