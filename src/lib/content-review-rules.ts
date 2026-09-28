@@ -85,6 +85,41 @@ export function isHeld(pkg: Pick<ContentPackage, "status" | "platforms">): boole
   );
 }
 
+/** Held statuses that count towards the card-level "Held (N)" chip. */
+const HELD_STATUSES: PlatformStatus[] = ["held_tone", "held_title", "held_release"];
+/** Rows with nothing left to do (used to decide when "Out of date (N)" may show). */
+const DONE_STATUSES: PlatformStatus[] = ["posted", "posted_manual", "not_approved", "killed"];
+
+/**
+ * Card-level summary chip: the worst outstanding row state wins.
+ * killed > held_* ("Held (N)") > awaiting_manual ("Needs manual post (N)")
+ * > pending / undecided (today's chip) > out_of_date ("Out of date (N)", only
+ * when every other row is done) > the package status (Approved / Posted …).
+ * `blocked` / `revising` packages keep today's chip (same override as grouping).
+ */
+export type CardSummary =
+  | { kind: "killed" }
+  | { kind: "held"; count: number }
+  | { kind: "manual"; count: number }
+  | { kind: "out_of_date"; count: number }
+  | { kind: "default" }; // pending chip or package status, exactly as before
+
+export function cardSummary(pkg: Pick<ContentPackage, "status" | "platforms">): CardSummary {
+  const rows = pkg.platforms.map((p) => platformStatus(pkg, p));
+  if (pkg.status === "killed" || rows.includes("killed")) return { kind: "killed" };
+  if (pkg.status === "blocked" || pkg.status === "revising") return { kind: "default" };
+  const held = rows.filter((s) => HELD_STATUSES.includes(s)).length;
+  if (held > 0) return { kind: "held", count: held };
+  const manual = rows.filter((s) => s === "awaiting_manual").length;
+  if (manual > 0) return { kind: "manual", count: manual };
+  if (rows.includes("review")) return { kind: "default" };
+  const stale = rows.filter((s) => s === "out_of_date").length;
+  if (stale > 0 && rows.every((s) => s === "out_of_date" || DONE_STATUSES.includes(s))) {
+    return { kind: "out_of_date", count: stale };
+  }
+  return { kind: "default" };
+}
+
 export function toneConfirmedForCurrent(pkg: Pick<ContentPackage, "revision" | "toneCheckedRevision">): boolean {
   return typeof pkg.toneCheckedRevision === "number" && pkg.toneCheckedRevision === pkg.revision;
 }

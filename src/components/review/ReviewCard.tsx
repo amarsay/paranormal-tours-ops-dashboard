@@ -14,6 +14,7 @@ import {
   isAwaitingReview,
   isPendingStale,
   pendingAgeMs,
+  cardSummary,
   platformStatus,
   platformsHeld,
   platformsHeldTitle,
@@ -26,6 +27,7 @@ import { ActionPanel } from "./ActionPanel";
 import {
   AiIllustrationTag,
   ContentStatusChip,
+  SummaryChip,
   CredibilityChip,
   ExampleTag,
   HOLD_REASON_LABELS,
@@ -414,13 +416,14 @@ export function ReviewCard({
   useEffect(() => setSelectedTitle(initialTitle), [pkg.revision, titleKey, initialTitle]);
   // Any row status other than `review` means the title decision is made (incl. published_private).
   const ytDecided = Boolean(ytRow && platformStatus(pkg, ytRow) !== "review");
+  const summary = cardSummary(pkg);
 
   return (
     <article
       id={`pkg-${pkg.packageId}`}
       className={`card grid gap-4 p-4 sm:p-5 lg:grid-cols-[260px,1fr] ${
         pkg.sensitive ? "border-rose-400/25" : ""
-      } ${platformsHeld(pkg).length || platformsHeldTitle(pkg).length ? "border-amber-400/40" : ""} ${busy ? "opacity-80" : ""}`}
+      } ${summary.kind === "held" ? "border-amber-400/40" : ""} ${busy ? "opacity-80" : ""}`}
       aria-labelledby={`subject-${pkg.packageId}`}
       aria-busy={busy || Boolean(pa)}
     >
@@ -434,10 +437,20 @@ export function ReviewCard({
       <div className="min-w-0 space-y-4">
         <header className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            {pa ? (
+            {summary.kind === "killed" && !optimisticStatus ? (
+              <ContentStatusChip status="killed" />
+            ) : (summary.kind === "held" || summary.kind === "manual") && !optimisticStatus ? (
+              <>
+                <SummaryChip kind={summary.kind} count={summary.count} />
+                {/* Worst row state wins the summary; an in-flight action still shows beside it. */}
+                {(pa || busyLabel) && <PendingChip label={pa ? PENDING_LABEL[pa.action] : busyLabel!} />}
+              </>
+            ) : pa ? (
               <PendingChip label={PENDING_LABEL[pa.action]} />
             ) : busyLabel && !optimisticStatus ? (
               <PendingChip label={busyLabel} />
+            ) : summary.kind === "out_of_date" && !optimisticStatus ? (
+              <SummaryChip kind="out_of_date" count={summary.count} />
             ) : (
               <ContentStatusChip status={optimisticStatus ?? pkg.status} />
             )}

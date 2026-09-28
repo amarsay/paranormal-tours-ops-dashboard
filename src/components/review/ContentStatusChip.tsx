@@ -94,6 +94,36 @@ export function ContentStatusChip({
   );
 }
 
+/** Card-level summary chip for rolled-up row states ("Held (2)", "Needs manual post (1)", "Out of date (1)"). */
+export function SummaryChip({ kind, count }: { kind: "held" | "manual" | "out_of_date"; count: number }) {
+  const cfg = {
+    held: { label: "Held", style: statusStyles.held_title },
+    manual: { label: "Needs manual post", style: statusStyles.awaiting_manual },
+    out_of_date: { label: "Out of date", style: statusStyles.out_of_date },
+  }[kind];
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${cfg.style}`}
+      data-summary={kind}
+    >
+      {cfg.label} ({count})
+    </span>
+  );
+}
+
+/** Package status chip with the card-level summary applied (see cardSummary in content-review-rules). */
+export function PackageSummaryChip({
+  status,
+  summary,
+}: {
+  status: ContentStatus;
+  summary: { kind: "killed" | "held" | "manual" | "out_of_date" | "default"; count?: number };
+}) {
+  if (summary.kind === "killed") return <ContentStatusChip status="killed" />;
+  if (summary.kind === "default") return <ContentStatusChip status={status} />;
+  return <SummaryChip kind={summary.kind} count={summary.count ?? 0} />;
+}
+
 const credStyles: Record<CredibilityLabel, string> = {
   DOCUMENTED: "bg-emerald-500/10 text-emerald-200 ring-emerald-400/30",
   REPORTED: "bg-sky-500/10 text-sky-200 ring-sky-400/30",

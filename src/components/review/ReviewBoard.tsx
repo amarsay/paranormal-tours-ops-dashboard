@@ -10,6 +10,7 @@ import type {
 } from "@/lib/content-review-types";
 import {
   PENDING_LABEL,
+  cardSummary,
   formatLondon,
   isAwaitingManual,
   isAwaitingReview,
@@ -19,7 +20,7 @@ import {
 import { refreshReviewSummary } from "@/lib/use-review-summary";
 import { BlockedList } from "./BlockedList";
 import { BudgetMeter } from "./BudgetMeter";
-import { ContentStatusChip, ExampleTag } from "./ContentStatusChip";
+import { ExampleTag, PackageSummaryChip } from "./ContentStatusChip";
 import { ReviewCard } from "./ReviewCard";
 import { Toasts, type Toast } from "./Toasts";
 
@@ -349,7 +350,7 @@ export function ReviewBoard() {
                     {p.lastSource === "sheet" && " · Updated from sheet"}
                   </p>
                 </div>
-                <ContentStatusChip status={p.status} />
+                <PackageSummaryChip status={p.status} summary={cardSummary(p)} />
               </li>
             ))}
           </ul>
