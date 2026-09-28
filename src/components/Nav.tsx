@@ -4,12 +4,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useOps } from "@/lib/store";
+import { useReviewSummary } from "@/lib/use-review-summary";
 
 const links = [
   { href: "/", label: "Overview" },
   { href: "/agents", label: "Agents" },
   { href: "/board", label: "Board" },
   { href: "/codex", label: "Codex" },
+  { href: "/review", label: "Review" },
 ];
 
 function LiveIndicator() {
@@ -44,6 +46,8 @@ function LiveIndicator() {
 
 export function Nav() {
   const pathname = usePathname();
+  const reviewSummary = useReviewSummary();
+  const pendingReview = reviewSummary?.pending ?? 0;
 
   return (
     <header className="sticky top-0 z-40 border-b border-white/5 bg-ink/80 backdrop-blur-xl">
@@ -86,6 +90,14 @@ export function Nav() {
                   }`}
                 >
                   {link.label}
+                  {link.href === "/review" && pendingReview > 0 && (
+                    <span
+                      className="ml-1.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500/80 px-1.5 text-[10px] font-semibold leading-5 text-white"
+                      aria-label={`${pendingReview} awaiting review`}
+                    >
+                      {pendingReview}
+                    </span>
+                  )}
                 </Link>
               );
             })}

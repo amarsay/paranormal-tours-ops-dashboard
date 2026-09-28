@@ -145,3 +145,21 @@ Local assign/board edits still work; the next live poll overlays remote presence
 ## Deploy
 
 Hosted on Vercel from [`amarsay/paranormal-tours-ops-dashboard`](https://github.com/amarsay/paranormal-tours-ops-dashboard). Set the three env vars in the Vercel project.
+
+## Content Review (`/review`)
+
+Founder review of daily video packages (Billy spec v0.1, incl. v0.2 additions). Nav item **Review** shows the pending count; the Overview "Needs you" strip gets a **Content awaiting review** row.
+
+| Route | Auth | Purpose |
+|------|------|---------|
+| `GET /api/content-review?status=review` | Review session (when passcode set) or `Bearer OPS_WRITE_TOKEN` | List packages + mode + budget |
+| `POST /api/content-review` | `Bearer OPS_WRITE_TOKEN` | n8n upserts the latest package (older revisions → 409) |
+| `POST /api/content-review/{id}/action` | Review session | `approve` / `reject` / `kill`; stale `revision` → 409 |
+| `GET /api/content-review/summary` | Public (counts only) | Nav badge / Overview row |
+| `POST /api/content-review/reset-mock` | Review session, mock mode only | Restore the example packages |
+| `POST|DELETE /api/review-auth` | — | Passcode sign-in / sign-out (signed HTTP-only cookie) |
+
+- **Mock mode** (no `N8N_REVIEW_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET`): example packages (subjects start "EXAMPLE —") are seeded and actions update the local cache only (`approve → approved`, `reject → revising` with revision +1, `kill → rejected`), responding `{ mock: true }`.
+- **Live mode**: the action JSON (spec section 4, plus `kill`) is forwarded server-side to n8n with `X-PT-Signature: hex(HMAC-SHA256(N8N_WEBHOOK_SECRET, rawBody))`. Example data is hidden.
+- **Storage**: Upstash Redis hash `pt:content-review:v1:packages` in production, `pt:content-review:<VERCEL_ENV>:v1:packages` elsewhere (preview/local never write production review data). Falls back to memory without Redis.
+- **Passcode**: set `REVIEW_ADMIN_PASSWORD` (and optionally `REVIEW_SESSION_SECRET`) to gate `/review` and the review APIs via `src/middleware.ts`. Without it the page shows an "Unprotected" banner.

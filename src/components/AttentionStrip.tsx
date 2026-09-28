@@ -3,12 +3,15 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useOps } from "@/lib/store";
+import { useReviewSummary } from "@/lib/use-review-summary";
 import { derivePresence } from "@/lib/freshness";
 import { AgentStatusChip } from "./StatusChip";
 
 /** Founder job queue: blocked + review only (Needs you). */
 export function AttentionStrip() {
   const { agents, hydrated } = useOps();
+  const reviewSummary = useReviewSummary();
+  const pendingContent = reviewSummary?.pending ?? 0;
 
   const needsYou = useMemo(() => {
     return agents
@@ -28,7 +31,7 @@ export function AttentionStrip() {
 
   if (!hydrated) return null;
 
-  if (needsYou.length === 0) {
+  if (needsYou.length === 0 && pendingContent === 0) {
     return (
       <div className="card border-white/5 px-4 py-3">
         <p className="text-sm text-ink-400">
@@ -44,9 +47,37 @@ export function AttentionStrip() {
         <h2 className="text-sm font-semibold uppercase tracking-wider text-rose-300/90">
           Needs you
         </h2>
-        <p className="text-xs text-ink-500">{needsYou.length} item(s)</p>
+        <p className="text-xs text-ink-500">
+          {needsYou.length + (pendingContent > 0 ? 1 : 0)} item(s)
+        </p>
       </div>
       <ul className="space-y-2">
+        {pendingContent > 0 && (
+          <li className="card flex flex-wrap items-center justify-between gap-3 border-violet-500/25 bg-violet-950/20 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Link href="/review" className="font-medium text-ink-50 hover:text-violet-200">
+                  Content awaiting review
+                </Link>
+                <span className="inline-flex items-center rounded-full bg-violet-500/15 px-2.5 py-0.5 text-xs font-medium text-violet-300 ring-1 ring-violet-400/40">
+                  {pendingContent} waiting
+                </span>
+                {reviewSummary?.mock && (
+                  <span className="text-[11px] text-amber-200/80">mock data</span>
+                )}
+              </div>
+              <p className="mt-1 truncate text-sm text-ink-300">
+                Daily video packages ready for approve or reject.
+              </p>
+            </div>
+            <Link
+              href="/review"
+              className="shrink-0 rounded-xl bg-violet-500/20 px-3 py-1.5 text-sm font-medium text-violet-100 ring-1 ring-violet-400/40 transition hover:bg-violet-500/30"
+            >
+              Review
+            </Link>
+          </li>
+        )}
         {needsYou.map(({ agent, presence }) => {
           const isReview = presence === "review";
           const cta = isReview ? "Review" : "Unblock";
