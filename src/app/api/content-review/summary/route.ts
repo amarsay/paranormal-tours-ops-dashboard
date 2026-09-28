@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ContentReviewSummary } from "@/lib/content-review-types";
 import { listPackages, reviewMode } from "@/lib/content-review-store";
+import { isActionable, isAwaitingManual, isHeld } from "@/lib/content-review-rules";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,7 +10,10 @@ export const runtime = "nodejs";
 export async function GET() {
   const all = await listPackages();
   const body: ContentReviewSummary = {
-    pending: all.filter((p) => p.status === "review").length,
+    // Derived from platform rows: any row in review, or held for a tone check.
+    pending: all.filter(isActionable).length,
+    held: all.filter(isHeld).length,
+    manual: all.filter(isAwaitingManual).length,
     blocked: all.filter((p) => p.status === "blocked").length,
     mock: reviewMode().mock,
   };

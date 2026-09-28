@@ -8,7 +8,14 @@ import type {
   ContentStatus,
   ReviewActionRequest,
 } from "@/lib/content-review-types";
-import { formatLondon } from "@/lib/content-review-rules";
+import {
+  PENDING_LABEL,
+  formatLondon,
+  isAwaitingManual,
+  isAwaitingReview,
+  isHeld,
+  platformStatus,
+} from "@/lib/content-review-rules";
 import { refreshReviewSummary } from "@/lib/use-review-summary";
 import { BlockedList } from "./BlockedList";
 import { BudgetMeter } from "./BudgetMeter";
@@ -17,25 +24,43 @@ import { ReviewCard } from "./ReviewCard";
 import { Toasts, type Toast } from "./Toasts";
 
 const POLL_MS = 20_000;
+/** Faster poll while any card waits for n8n to post back. */
+const PENDING_POLL_MS = 8_000;
 
+/** MOCK mode only: instant status while the request is in flight. */
 const OPTIMISTIC: Record<ReviewActionRequest["action"], ContentStatus> = {
   approve: "approved",
   reject: "revising",
-  kill: "rejected",
+  kill: "killed",
+  confirm_tone: "approved",
+  mark_manual_done: "approved",
 };
 
 const DONE_MSG: Record<ReviewActionRequest["action"], string> = {
   approve: "Approved",
   reject: "Sent back for revision",
   kill: "Item killed",
+  confirm_tone: "Tone confirmed",
+  mark_manual_done: "Marked posted",
 };
+
+function approvedSummary(p: ContentPackage): string | null {
+  const approved = p.platforms.filter((x) => ["approved", "scheduled", "posted", "posted_manual"].includes(platformStatus(p, x))).length;
+  if (!approved) return null;
+  return approved === p.platforms.length
+    ? ` · approved for all ${approved} platforms`
+    : ` · approved for ${approved}/${p.platforms.length} platforms`;
+}
 
 export function ReviewBoard() {
   const [data, setData] = useState<ContentReviewListResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pending, setPending] = useState<Record<string, ContentStatus>>({});
+  // Requests in flight, keyed by packageId (the persisted pendingAction lives on the package).
+  const [pending, setPending] = useState<Record<string, ReviewActionRequest["action"]>>({});
+  const [retrying, setRetrying] = useState<Record<string, boolean>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [resetting, setResetting] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const toastId = useRef(0);
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
@@ -63,24 +88,63 @@ export function ReviewBoard() {
     }
   }, []);
 
+  const anyPending = Boolean(data?.packages.some((p) => p.pendingAction));
+
   useEffect(() => {
     void load();
-    const t = setInterval(load, POLL_MS);
+    const t = setInterval(load, anyPending ? PENDING_POLL_MS : POLL_MS);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, anyPending]);
+
+  // Re-evaluate the 10-minute "No response from n8n yet" threshold.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
 
   const replacePackage = useCallback((next: ContentPackage) => {
     setData((d) =>
-      d ? { ...d, packages: d.packages.map((p) => (p.contentId === next.contentId ? next : p)) } : d
+      d ? { ...d, packages: d.packages.map((p) => (p.packageId === next.packageId ? next : p)) } : d
     );
   }, []);
 
+  const onRetry = useCallback(
+    async (pkg: ContentPackage) => {
+      setRetrying((r) => ({ ...r, [pkg.packageId]: true }));
+      try {
+        const res = await fetch(`/api/content-review/${encodeURIComponent(pkg.packageId)}/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ retry: true, revision: pkg.revision }),
+        });
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          package?: ContentPackage;
+          current?: ContentPackage;
+        };
+        if (!res.ok) {
+          if (json.current) replacePackage(json.current);
+          toast("error", json.error ?? `Retry failed (HTTP ${res.status}).`);
+          return;
+        }
+        if (json.package) replacePackage(json.package);
+        setNow(Date.now());
+        toast("info", "Resent to n8n (same request). Waiting for the sheet to update.");
+      } catch {
+        toast("error", "Network error — the retry was not sent.");
+      } finally {
+        setRetrying((r) => ({ ...r, [pkg.packageId]: false }));
+      }
+    },
+    [replacePackage, toast]
+  );
+
   const onAction = useCallback(
     async (pkg: ContentPackage, req: ReviewActionRequest): Promise<boolean> => {
-      if (pendingRef.current[pkg.contentId]) return false;
-      setPending((p) => ({ ...p, [pkg.contentId]: OPTIMISTIC[req.action] }));
+      if (pendingRef.current[pkg.packageId]) return false;
+      setPending((p) => ({ ...p, [pkg.packageId]: req.action }));
       try {
-        const res = await fetch(`/api/content-review/${encodeURIComponent(pkg.contentId)}/action`, {
+        const res = await fetch(`/api/content-review/${encodeURIComponent(pkg.packageId)}/action`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(req),
@@ -98,7 +162,8 @@ export function ReviewBoard() {
           return false;
         }
         if (json.package) replacePackage(json.package);
-        toast("ok", `${DONE_MSG[req.action]}${json.mock ? " (mock — nothing sent to n8n)" : ""}.`);
+        if (json.mock) toast("ok", `${DONE_MSG[req.action]} (mock — nothing sent to n8n).`);
+        else toast("info", `${PENDING_LABEL[req.action]} sent to n8n. The card updates once the sheet confirms.`);
         refreshReviewSummary();
         return true;
       } catch {
@@ -107,7 +172,7 @@ export function ReviewBoard() {
       } finally {
         setPending((p) => {
           const next = { ...p };
-          delete next[pkg.contentId];
+          delete next[pkg.packageId];
           return next;
         });
       }
@@ -142,12 +207,35 @@ export function ReviewBoard() {
   }
 
   const packages = data?.packages ?? [];
-  const inReview = packages.filter((p) => p.status === "review" || pending[p.contentId]);
-  const blocked = packages.filter((p) => p.status === "blocked");
-  const actioned = packages.filter(
-    (p) => p.status !== "review" && p.status !== "blocked" && !pending[p.contentId]
+  // Groups are derived from the platform rows, not the package status alone.
+  const held = packages.filter(isHeld);
+  const inReview = packages.filter(
+    (p) => !isHeld(p) && (isAwaitingReview(p) || p.pendingAction || pending[p.packageId])
   );
+  const manual = packages.filter(
+    (p) => !isHeld(p) && !inReview.includes(p) && isAwaitingManual(p)
+  );
+  const blocked = packages.filter((p) => p.status === "blocked");
+  const shown = new Set([...held, ...inReview, ...manual, ...blocked].map((p) => p.packageId));
+  const actioned = packages.filter((p) => !shown.has(p.packageId));
   const mode = data?.mode;
+
+  const renderCard = (p: ContentPackage) => {
+    const inflight = pending[p.packageId];
+    return (
+      <ReviewCard
+        key={p.packageId}
+        pkg={p}
+        busyLabel={inflight ? (mode?.mock ? "Saving…" : PENDING_LABEL[inflight]) : undefined}
+        optimisticStatus={inflight && mode?.mock ? OPTIMISTIC[inflight] : undefined}
+        now={now}
+        retrying={Boolean(retrying[p.packageId])}
+        onAction={onAction}
+        onRetry={onRetry}
+        onCopied={onCopied}
+      />
+    );
+  };
 
   return (
     <div className="space-y-8">
@@ -201,6 +289,18 @@ export function ReviewBoard() {
         </p>
       )}
 
+      {held.length > 0 && (
+        <section aria-labelledby="held-heading" className="space-y-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 id="held-heading" className="text-sm font-semibold uppercase tracking-wider text-amber-300">
+              Held by the publisher
+            </h2>
+            <p className="text-xs text-ink-500">{held.length} item(s) · publishing paused on some platforms</p>
+          </div>
+          {held.map(renderCard)}
+        </section>
+      )}
+
       <section aria-labelledby="awaiting-heading" className="space-y-4">
         <div className="flex items-baseline justify-between gap-2">
           <h2 id="awaiting-heading" className="text-sm font-semibold uppercase tracking-wider text-violet-300/90">
@@ -211,17 +311,20 @@ export function ReviewBoard() {
         {data && inReview.length === 0 && (
           <p className="card px-4 py-3 text-sm text-ink-400">Nothing waiting for review. Nice.</p>
         )}
-        {inReview.map((p) => (
-          <ReviewCard
-            key={p.contentId}
-            pkg={p}
-            pending={Boolean(pending[p.contentId])}
-            optimisticStatus={pending[p.contentId]}
-            onAction={onAction}
-            onCopied={onCopied}
-          />
-        ))}
+        {inReview.map(renderCard)}
       </section>
+
+      {manual.length > 0 && (
+        <section aria-labelledby="manual-heading" className="space-y-4">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 id="manual-heading" className="text-sm font-semibold uppercase tracking-wider text-blue-300">
+              To finish by hand
+            </h2>
+            <p className="text-xs text-ink-500">{manual.length} item(s) · post in the app, then mark posted</p>
+          </div>
+          {manual.map(renderCard)}
+        </section>
+      )}
 
       {actioned.length > 0 && (
         <section aria-labelledby="actioned-heading" className="space-y-3">
@@ -230,7 +333,7 @@ export function ReviewBoard() {
           </h2>
           <ul className="space-y-2">
             {actioned.map((p) => (
-              <li key={p.contentId} className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <li key={p.packageId} className="card flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-medium text-ink-100">{p.subject}</p>
@@ -238,8 +341,8 @@ export function ReviewBoard() {
                   </div>
                   <p className="mt-0.5 text-xs text-ink-500">
                     Revision {p.revisionCount}/{p.revisionCap} · updated {formatLondon(p.updatedAt)}
-                    {p.platforms.some((x) => x.status === "approved") &&
-                      ` · approved for ${p.platforms.filter((x) => x.status === "approved").length} platform(s)`}
+                    {approvedSummary(p)}
+                    {p.lastSource === "sheet" && " · Updated from sheet"}
                   </p>
                 </div>
                 <ContentStatusChip status={p.status} />

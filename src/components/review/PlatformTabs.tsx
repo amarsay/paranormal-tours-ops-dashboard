@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState, type KeyboardEvent } from "react";
-import type { PlatformCopy } from "@/lib/content-review-types";
+import type { ContentScript, ContentStatus, PlatformCopy, PlatformStatus } from "@/lib/content-review-types";
 import { PLATFORM_LABELS } from "@/lib/content-review-types";
 import {
   DEFAULT_CHAR_LIMITS,
@@ -10,8 +10,23 @@ import {
   charCount,
   composedCopy,
   formatLondon,
+  platformStatus,
 } from "@/lib/content-review-rules";
-import { ContentStatusChip } from "./ContentStatusChip";
+import { ContentStatusChip, STATUS_LABELS } from "./ContentStatusChip";
+
+const TAB_DOT: Partial<Record<PlatformStatus, string>> = {
+  approved: "bg-teal-400",
+  scheduled: "bg-sky-400",
+  posted: "bg-emerald-400",
+  held_tone: "bg-amber-400",
+  held_title: "bg-amber-400",
+  awaiting_manual: "bg-blue-400",
+  posted_manual: "bg-emerald-400",
+  published_private: "bg-slate-400",
+  not_approved: "bg-slate-500",
+  killed: "bg-slate-500",
+  failed: "bg-rose-500",
+};
 import { CopyButton } from "./CopyButton";
 
 const SHORT: Record<string, string> = {
@@ -72,7 +87,114 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function PanelBody({ p, onCopied }: { p: PlatformCopy; onCopied: (ok: boolean) => void }) {
+export interface YoutubeChoice {
+  script: ContentScript;
+  coverImageUrl?: string | null;
+  /** Stored (sheet) value on the youtube row; null after approval = default option 1. */
+  storedTitle?: string | null;
+  rowDecided: boolean;
+  selectedTitle: string | null;
+  onSelectTitle: (t: string) => void;
+  /** Row still in review → founder can pick; otherwise read-only. */
+  editable: boolean;
+}
+
+function YoutubeScriptExtras({ yt, name }: { yt: YoutubeChoice; name: string }) {
+  const options = (yt.script.youtubeTitleOptions ?? []).filter((t) => t.trim());
+  const { hookOverlay, openQuestion, coverFrameScene } = yt.script;
+  const hasExtras = Boolean(hookOverlay || openQuestion || (coverFrameScene !== undefined && coverFrameScene !== ""));
+  if (!options.length && !hasExtras && !yt.coverImageUrl) return null;
+  const showDefault = yt.rowDecided && !yt.storedTitle && options.length > 0;
+  return (
+    <div className="space-y-3 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+      {yt.coverImageUrl && (
+        <figure className="space-y-1">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={yt.coverImageUrl}
+            alt="Cover image (YouTube thumbnail)"
+            className="aspect-video w-full max-w-[280px] rounded-lg bg-black object-cover ring-1 ring-white/10"
+            loading="lazy"
+          />
+          <figcaption className="text-[11px] text-ink-500">Cover image</figcaption>
+        </figure>
+      )}
+      {yt.rowDecided && options.length > 0 && (
+        <p className="text-sm text-ink-100">
+          <span className="text-ink-500">Title: </span>
+          {showDefault ? (
+            <>
+              option 1 (default) <span className="text-ink-400">— {options[0]}</span>
+            </>
+          ) : (
+            yt.storedTitle
+          )}
+        </p>
+      )}
+      {options.length > 0 && !yt.rowDecided && (
+        <fieldset className="space-y-1.5" disabled={!yt.editable}>
+          <legend className="text-[11px] font-semibold uppercase tracking-wider text-ink-500">
+            Title options <span className="normal-case tracking-normal text-ink-400">(pick one — sent with Approve)</span>
+          </legend>
+          {options.map((t) => (
+            <label key={t} className="flex items-start gap-2 text-sm text-ink-100">
+              <input
+                type="radio"
+                name={name}
+                className="mt-1 h-4 w-4 accent-violet-500"
+                checked={yt.selectedTitle === t}
+                onChange={() => yt.onSelectTitle(t)}
+              />
+              <span>
+                {t}{" "}
+                <span className={`text-xs tabular-nums ${charCount(t) > YOUTUBE_TITLE_LIMIT ? "text-rose-300" : "text-ink-500"}`}>
+                  ({charCount(t)}/{YOUTUBE_TITLE_LIMIT})
+                </span>
+              </span>
+            </label>
+          ))}
+          {!yt.selectedTitle && yt.editable && (
+            <p className="text-xs text-amber-200/90">No title picked yet — needed to approve YouTube.</p>
+          )}
+        </fieldset>
+      )}
+      {hasExtras && (
+        <dl className="grid gap-2 text-xs sm:grid-cols-3">
+          <div>
+            <dt className="text-ink-500">Hook overlay</dt>
+            <dd className="text-ink-200">{hookOverlay || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-500">Open question</dt>
+            <dd className="text-ink-200">{openQuestion || "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-ink-500">Cover frame</dt>
+            <dd className="text-ink-200">
+              {coverFrameScene === undefined || coverFrameScene === ""
+                ? "—"
+                : typeof coverFrameScene === "number"
+                  ? `Scene ${coverFrameScene}`
+                  : coverFrameScene}
+            </dd>
+          </div>
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function PanelBody({
+  p,
+  onCopied,
+  yt,
+  radioName,
+}: {
+  p: PlatformCopy;
+  onCopied: (ok: boolean) => void;
+  yt?: YoutubeChoice;
+  radioName: string;
+}) {
   const schedule = (
     <p className="text-xs text-ink-400">
       Scheduled: <span className="text-ink-200">{formatLondon(p.scheduleAt)}</span>
@@ -83,7 +205,8 @@ function PanelBody({ p, onCopied }: { p: PlatformCopy; onCopied: (ok: boolean) =
   if (p.platform === "youtube") {
     return (
       <div className="space-y-3">
-        <Field label="Title">
+        {yt && <YoutubeScriptExtras yt={yt} name={radioName} />}
+        <Field label={yt?.script.youtubeTitleOptions?.length ? "Current title" : "Title"}>
           <p className="text-sm font-medium text-ink-50">{p.title || "—"}</p>
           <Counter used={charCount(p.title)} limit={YOUTUBE_TITLE_LIMIT} label="Title" />
         </Field>
@@ -200,10 +323,14 @@ function PanelBody({ p, onCopied }: { p: PlatformCopy; onCopied: (ok: boolean) =
 
 export function PlatformTabs({
   platforms,
+  pkgStatus,
   onCopied,
+  youtube,
 }: {
   platforms: PlatformCopy[];
+  pkgStatus: ContentStatus;
   onCopied: (ok: boolean) => void;
+  youtube?: YoutubeChoice;
 }) {
   const [active, setActive] = useState(0);
   const baseId = useId();
@@ -238,6 +365,7 @@ export function PlatformTabs({
         {platforms.map((p, i) => {
           const selected = i === active;
           const over = isOver(p);
+          const st = platformStatus({ status: pkgStatus }, p);
           return (
             <button
               key={p.platform}
@@ -251,13 +379,16 @@ export function PlatformTabs({
               aria-controls={`${baseId}-panel`}
               tabIndex={selected ? 0 : -1}
               onClick={() => setActive(i)}
-              title={PLATFORM_LABELS[p.platform]}
+              title={`${PLATFORM_LABELS[p.platform]} · ${STATUS_LABELS[st]}`}
               className={`relative shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
                 selected
                   ? "bg-violet-500/20 text-violet-100"
                   : "text-ink-300 hover:bg-white/5 hover:text-ink-100"
               }`}
             >
+              {TAB_DOT[st] && (
+                <span className={`mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle ${TAB_DOT[st]}`} aria-hidden />
+              )}
               {SHORT[p.platform] ?? p.platform}
               {over && (
                 <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-rose-400 align-middle" aria-label="over character limit" />
@@ -275,9 +406,14 @@ export function PlatformTabs({
       >
         <div className="mb-2 flex items-center justify-between gap-2">
           <h4 className="text-sm font-semibold text-ink-100">{PLATFORM_LABELS[current.platform]}</h4>
-          {current.status && <ContentStatusChip status={current.status} />}
+          <ContentStatusChip status={platformStatus({ status: pkgStatus }, current)} at={current.postedAt} />
         </div>
-        <PanelBody p={current} onCopied={onCopied} />
+        <PanelBody
+          p={current}
+          onCopied={onCopied}
+          yt={current.platform === "youtube" ? youtube : undefined}
+          radioName={`${baseId}-yt-title`}
+        />
       </div>
     </div>
   );

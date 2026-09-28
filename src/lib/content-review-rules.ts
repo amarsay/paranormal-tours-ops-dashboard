@@ -1,12 +1,140 @@
 import type {
   ContentPackage,
+  ContentStatus,
   PlatformCopy,
   PlatformId,
+  PlatformStatus,
+  ReviewAction,
   ReviewActionRequest,
   ReviewStage,
   StageCostEstimatesGbp,
 } from "./content-review-types";
-import { PLATFORM_IDS, REVIEW_STAGES } from "./content-review-types";
+import {
+  PENDING_WARN_MS,
+  PLATFORM_IDS,
+  PLATFORM_STATUSES,
+  REVIEW_ACTIONS,
+  REVIEW_STAGES,
+} from "./content-review-types";
+
+// ---------------------------------------------------------------------------
+// Derived state. The sheet (via n8n) owns per-platform statuses; the card's
+// place on /review is derived from the platform rows, not the package status.
+// ---------------------------------------------------------------------------
+
+/** Package statuses that take the whole card out of review whatever the rows say. */
+const PACKAGE_OVERRIDES: ContentStatus[] = ["blocked", "killed", "revising"];
+
+/** Default row status when a platform row arrives without one. */
+export function defaultPlatformStatus(pkgStatus: ContentStatus): PlatformStatus {
+  if ((PLATFORM_STATUSES as readonly string[]).includes(pkgStatus)) return pkgStatus as PlatformStatus;
+  return "review"; // revising / blocked: rows are not decided yet
+}
+
+export function platformStatus(pkg: Pick<ContentPackage, "status">, p: PlatformCopy): PlatformStatus {
+  return p.status ?? defaultPlatformStatus(pkg.status);
+}
+
+/** Platform rows still waiting for a founder decision. */
+export function platformsInReview(pkg: Pick<ContentPackage, "status" | "platforms">): PlatformId[] {
+  return pkg.platforms.filter((p) => platformStatus(pkg, p) === "review").map((p) => p.platform);
+}
+
+/**
+ * True while the card belongs in "Awaiting review": at least one platform row
+ * is still `review` (or, with no rows at all, the package itself is `review`).
+ */
+export function isAwaitingReview(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
+  if (PACKAGE_OVERRIDES.includes(pkg.status)) return false;
+  if (pkg.platforms.length === 0) return pkg.status === "review";
+  return platformsInReview(pkg).length > 0;
+}
+
+/** Rows the Publish poller is holding for a missing tone check. */
+export function platformsHeld(pkg: Pick<ContentPackage, "status" | "platforms">): PlatformId[] {
+  return pkg.platforms.filter((p) => platformStatus(pkg, p) === "held_tone").map((p) => p.platform);
+}
+
+/** Rows held because a hand-typed title failed the banned-phrase check (youtube). */
+export function platformsHeldTitle(pkg: Pick<ContentPackage, "status" | "platforms">): PlatformId[] {
+  return pkg.platforms.filter((p) => platformStatus(pkg, p) === "held_title").map((p) => p.platform);
+}
+
+/** Rows the founder must finish by hand in the app. */
+export function platformsAwaitingManual(pkg: Pick<ContentPackage, "status" | "platforms">): PlatformId[] {
+  return pkg.platforms.filter((p) => platformStatus(pkg, p) === "awaiting_manual").map((p) => p.platform);
+}
+
+export function isAwaitingManual(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
+  if (PACKAGE_OVERRIDES.includes(pkg.status)) return false;
+  return platformsAwaitingManual(pkg).length > 0;
+}
+
+/** Card goes in the "Held" group at the top of /review (any held_tone / held_title row). */
+export function isHeld(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
+  if (PACKAGE_OVERRIDES.includes(pkg.status)) return false;
+  return platformsHeld(pkg).length > 0 || platformsHeldTitle(pkg).length > 0;
+}
+
+export function toneConfirmedForCurrent(pkg: Pick<ContentPackage, "revision" | "toneCheckedRevision">): boolean {
+  return typeof pkg.toneCheckedRevision === "number" && pkg.toneCheckedRevision === pkg.revision;
+}
+
+/** Card has something the founder can act on (review rows, or held rows needing a tone tick). */
+export function isActionable(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
+  return isAwaitingReview(pkg) || isHeld(pkg) || isAwaitingManual(pkg);
+}
+
+/** Some rows decided, some still in review (e.g. partial approval via the sheet). */
+export function isPartiallyDecided(pkg: Pick<ContentPackage, "status" | "platforms">): boolean {
+  const open = platformsInReview(pkg).length;
+  return open > 0 && open < pkg.platforms.length;
+}
+
+export const PENDING_LABEL: Record<ReviewAction, string> = {
+  approve: "Approving…",
+  reject: "Sending back…",
+  kill: "Killing…",
+  confirm_tone: "Confirming tone…",
+  mark_manual_done: "Marking posted…",
+};
+
+export function pendingAgeMs(pkg: Pick<ContentPackage, "pendingAction">, now = Date.now()): number {
+  const pa = pkg.pendingAction;
+  if (!pa) return 0;
+  const t = new Date(pa.lastSentAt || pa.at).getTime();
+  return Number.isFinite(t) ? Math.max(0, now - t) : 0;
+}
+
+export function isPendingStale(pkg: Pick<ContentPackage, "pendingAction">, now = Date.now()): boolean {
+  return Boolean(pkg.pendingAction) && pendingAgeMs(pkg, now) > PENDING_WARN_MS;
+}
+
+/**
+ * Does an inbound (sheet / n8n) state show that the pending action landed?
+ * approve → none of the approved rows is still `review`; reject → revising or
+ * a newer revision; kill → killed. A newer revision always resolves it.
+ */
+export function pendingResolvedBy(prev: ContentPackage, next: ContentPackage): boolean {
+  const pa = prev.pendingAction;
+  if (!pa) return true;
+  if (next.revision > prev.revision) return true;
+  if (next.status === "killed") return true;
+  if (pa.action === "reject") return next.status === "revising";
+  if (pa.action === "kill") return false;
+  if (pa.action === "confirm_tone") {
+    return toneConfirmedForCurrent(next) || platformsHeld(next).length === 0;
+  }
+  if (pa.payload.action === "mark_manual_done") {
+    const id = pa.payload.platform;
+    const row = next.platforms.find((p) => p.platform === id);
+    return !row || platformStatus(next, row) !== "awaiting_manual";
+  }
+  const payload = pa.payload;
+  if (payload.action === "confirm_tone") return false;
+  const byId = new Map(next.platforms.map((p) => [p.platform, platformStatus(next, p)]));
+  return payload.platforms.every((id) => byId.get(id) !== undefined && byId.get(id) !== "review");
+}
 
 /** Shared (client + server) validation for review actions. */
 export type ActionCheck =
@@ -24,8 +152,8 @@ export function validateAction(
   if (!req || typeof req !== "object") {
     return { ok: false, status: 400, error: "Missing action body." };
   }
-  if (!["approve", "reject", "kill"].includes(req.action)) {
-    return { ok: false, status: 400, error: "Action must be approve, reject or kill." };
+  if (!(REVIEW_ACTIONS as string[]).includes(req.action)) {
+    return { ok: false, status: 400, error: "Action must be approve, reject, kill or confirm_tone." };
   }
   if (typeof req.revision !== "number" || !Number.isFinite(req.revision)) {
     return { ok: false, status: 400, error: "revision is required." };
@@ -40,11 +168,43 @@ export function validateAction(
   if (pkg.status === "blocked") {
     return { ok: false, status: 409, error: "Blocked items are read-only." };
   }
-  if (pkg.status !== "review") {
+  if (pkg.pendingAction) {
     return {
       ok: false,
       status: 409,
-      error: `Only items in review can be actioned (this one is ${pkg.status}).`,
+      error: `Waiting for n8n to confirm the last action (${pkg.pendingAction.action}). Retry it instead of sending a new one.`,
+    };
+  }
+  if (req.action === "mark_manual_done") {
+    const row = pkg.platforms.find((p) => p.platform === req.platform);
+    if (!req.platform || !row) {
+      return { ok: false, status: 400, error: "mark_manual_done needs a platform that's on this package." };
+    }
+    if (platformStatus(pkg, row) !== "awaiting_manual") {
+      return { ok: false, status: 409, error: `${req.platform} isn't waiting to be finished by hand.` };
+    }
+    return { ok: true };
+  }
+  if (req.action === "confirm_tone") {
+    if (!pkg.sensitive) {
+      return { ok: false, status: 400, error: "confirm_tone is only for SENSITIVE items." };
+    }
+    if (req.toneChecked !== true) {
+      return { ok: false, status: 400, error: "confirm_tone needs toneChecked: true." };
+    }
+    if (pkg.status === "killed" || pkg.status === "revising") {
+      return { ok: false, status: 409, error: `Nothing to confirm: this item is ${pkg.status}.` };
+    }
+    if (toneConfirmedForCurrent(pkg)) {
+      return { ok: false, status: 409, error: `Tone already confirmed for revision ${pkg.revision}.` };
+    }
+    return { ok: true };
+  }
+  if (!isAwaitingReview(pkg)) {
+    return {
+      ok: false,
+      status: 409,
+      error: `Only items with a platform still in review can be actioned (this one is ${pkg.status}).`,
     };
   }
 
@@ -57,7 +217,10 @@ export function validateAction(
   }
 
   if (req.action === "approve") {
-    if (pkg.sensitive && !req.toneChecked) {
+    if (req.toneChecked !== undefined && typeof req.toneChecked !== "boolean") {
+      return { ok: false, status: 400, error: "toneChecked must be true or false." };
+    }
+    if (pkg.sensitive && req.toneChecked !== true) {
       return {
         ok: false,
         status: 400,
@@ -66,6 +229,24 @@ export function validateAction(
     }
     if (platforms.length === 0) {
       return { ok: false, status: 400, error: "Choose at least one platform to approve." };
+    }
+    const titleOptions = youtubeTitleOptions(pkg);
+    if (platforms.includes("youtube") && titleOptions.length > 0) {
+      if (!req.selectedTitle) {
+        return { ok: false, status: 400, error: "Pick a YouTube title on the YouTube tab before approving YouTube." };
+      }
+      if (!titleOptions.includes(req.selectedTitle)) {
+        return { ok: false, status: 400, error: "selectedTitle must be one of the YouTube title options." };
+      }
+    }
+    const open = new Set(platformsInReview(pkg));
+    const decided = platforms.filter((p) => !open.has(p));
+    if (decided.length) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Already decided in the sheet: ${decided.join(", ")}. Only platforms still in review can be approved.`,
+      };
     }
     return { ok: true };
   }
@@ -109,6 +290,11 @@ export function validateAction(
     };
   }
   return { ok: true };
+}
+
+export function youtubeTitleOptions(pkg: Pick<ContentPackage, "script">): string[] {
+  const opts = pkg.script?.youtubeTitleOptions;
+  return Array.isArray(opts) ? opts.filter((t) => typeof t === "string" && t.trim()) : [];
 }
 
 export function estimateRedoCostGbp(

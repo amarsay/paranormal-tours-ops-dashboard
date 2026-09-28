@@ -2,10 +2,12 @@ import { NextResponse } from "next/server";
 import type { ContentReviewListResponse, ContentStatus } from "@/lib/content-review-types";
 import { CONTENT_STATUSES } from "@/lib/content-review-types";
 import {
+  applyInbound,
   budgetSummary,
+  filterByStatus,
   getPackage,
   listPackages,
-  normalisePackage,
+  parseInboundMeta,
   reviewMode,
   savePackage,
 } from "@/lib/content-review-store";
@@ -14,7 +16,7 @@ import { requireWriteToken } from "@/lib/ops-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET — list packages, optional ?status=review|revising|… */
+/** GET — list packages, optional ?status=review|revising|… (`review` = any platform row still in review). */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const statusParam = url.searchParams.get("status");
@@ -30,7 +32,7 @@ export async function GET(req: Request) {
   }
 
   const all = await listPackages();
-  const packages = status ? all.filter((p) => p.status === status) : all;
+  const packages = status ? filterByStatus(all, status) : all;
   const body: ContentReviewListResponse = {
     packages,
     mode: reviewMode(),
@@ -40,7 +42,12 @@ export async function GET(req: Request) {
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }
 
-/** POST — n8n upserts the latest package for a content item (Bearer OPS_WRITE_TOKEN). */
+/**
+ * POST — n8n upserts a package (Bearer OPS_WRITE_TOKEN). `source: "sheet" | "n8n"`.
+ * Older revision → 409. Same revision → accepted as a status / platform-status
+ * update (partial body is fine). Newer revision or new item → full package.
+ * Legacy `contentId` is accepted as an alias for `packageId`.
+ */
 export async function POST(req: Request) {
   const denied = requireWriteToken(req);
   if (denied) return denied;
@@ -52,21 +59,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const result = normalisePackage(raw);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+  const parsed = parseInboundMeta(raw);
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const existing = await getPackage(result.pkg.contentId);
-  if (existing && existing.revision > result.pkg.revision) {
+  const existing = await getPackage(parsed.meta.packageId);
+  const result = applyInbound(existing, parsed.meta, parsed.body);
+  if (!result.ok) {
     return NextResponse.json(
-      {
-        error: `Stale package: stored revision ${existing.revision} is newer than ${result.pkg.revision}.`,
-      },
-      { status: 409 }
+      { error: result.error, ...(result.current ? { storedRevision: result.current.revision } : {}) },
+      { status: result.status }
     );
   }
 
   const saved = await savePackage(result.pkg);
-  return NextResponse.json({ ok: true, package: saved, storage: reviewMode().storage });
+  return NextResponse.json({
+    ok: true,
+    result: result.kind,
+    package: saved,
+    storage: reviewMode().storage,
+  });
 }

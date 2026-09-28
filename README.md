@@ -148,18 +148,41 @@ Hosted on Vercel from [`amarsay/paranormal-tours-ops-dashboard`](https://github.
 
 ## Content Review (`/review`)
 
-Founder review of daily video packages (Billy spec v0.1, incl. v0.2 additions). Nav item **Review** shows the pending count; the Overview "Needs you" strip gets a **Content awaiting review** row.
+Founder review of daily video packages (Billy spec v0.1 + agreed contract changes). **The sheet is the only source of truth**: n8n writes the sheet and posts the resulting state here; the dashboard never holds Google credentials. Redis is a display cache.
 
 | Route | Auth | Purpose |
 |------|------|---------|
-| `GET /api/content-review?status=review` | Review session (when passcode set) or `Bearer OPS_WRITE_TOKEN` | List packages + mode + budget |
-| `POST /api/content-review` | `Bearer OPS_WRITE_TOKEN` | n8n upserts the latest package (older revisions → 409) |
-| `POST /api/content-review/{id}/action` | Review session | `approve` / `reject` / `kill`; stale `revision` → 409 |
-| `GET /api/content-review/summary` | Public (counts only) | Nav badge / Overview row |
+| `GET /api/content-review?status=review` | Review session (when passcode set) or `Bearer OPS_WRITE_TOKEN` | List packages + mode + budget (`review` = any platform row still `review`) |
+| `POST /api/content-review` | `Bearer OPS_WRITE_TOKEN` | n8n / sheet sync upserts a package (rules below) |
+| `POST /api/content-review/{packageId}/action` | Review session | `approve` / `reject` / `kill` / `confirm_tone` / `mark_manual_done`, or `{ retry: true, revision }` |
+| `GET /api/content-review/summary` | Public (counts only) | `{ pending, held, manual, blocked, mock }` for the nav badge / Overview row |
 | `POST /api/content-review/reset-mock` | Review session, mock mode only | Restore the example packages |
 | `POST|DELETE /api/review-auth` | — | Passcode sign-in / sign-out (signed HTTP-only cookie) |
 
-- **Mock mode** (no `N8N_REVIEW_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET`): example packages (subjects start "EXAMPLE —") are seeded and actions update the local cache only (`approve → approved`, `reject → revising` with revision +1, `kill → rejected`), responding `{ mock: true }`.
-- **Live mode**: the action JSON (spec section 4, plus `kill`) is forwarded server-side to n8n with `X-PT-Signature: hex(HMAC-SHA256(N8N_WEBHOOK_SECRET, rawBody))`. Example data is hidden.
-- **Storage**: Upstash Redis hash `pt:content-review:v1:packages` in production, `pt:content-review:<VERCEL_ENV>:v1:packages` elsewhere (preview/local never write production review data). Falls back to memory without Redis.
+### Inbound package POST (n8n → dashboard)
+
+- Keyed by `packageId` (legacy `contentId` accepted as an alias). `source: "sheet" | "n8n"` (default `n8n`); the card shows "Updated from sheet" when the last write came from the sheet. Sheet row reference is `sheetRef: { tab, row, sheetUrl }` (a legacy `source` *object* is still read as `sheetRef`).
+- **Older revision → 409.** **Same revision → accepted** as a status / platform-status update: send only what changed (e.g. `{ packageId, revision, source: "sheet", platforms: [{ platform: "website", status: "approved" }] }`); rows merge by `platform`. **Newer revision or new item →** full package (`status`, `subject` required).
+- Row `status`: `review | approved | not_approved | held_tone | held_title | awaiting_manual | posted_manual | published_private | killed | scheduled | posted | failed` (`posted_manual` rows may carry `postedAt` + `postedRevision`). Package `status`: `review | revising | approved | scheduled | posted | failed | killed | blocked`. Legacy `rejected` → `killed`, `skipped` → `not_approved`.
+- A card stays in **Awaiting review** while any row is `review` (derived; package status alone isn't trusted). `held_tone` / `held_title` rows put it in **Held by the publisher** at the top; `awaiting_manual` rows put it in **To finish by hand**. `published_private` (YouTube private upload while the Google API audit is pending) is never shown as live.
+- Optional: `toneCheckedRevision` (or `toneChecked: true` = this revision), `qaFlags: [{ check: duration|first_word|scene_length|loudness, detail }]`, `coverImageUrl`, `script.youtubeTitleOptions[]`, `script.hookOverlay`, `script.openQuestion`, `script.coverFrameScene`, youtube row `selectedTitle` (string|null; sheet is truth, null after approval = option 1 default).
+- `sensitive` can't be cleared from here: an inbound `false` over a stored `true` is ignored and noted in history ("sensitive flag change ignored").
+- `pendingAction` clears when the inbound state shows the action landed (approve: approved rows no longer `review`; reject: `revising` or newer revision; kill: `killed`; confirm_tone: `toneCheckedRevision` = revision or no `held_tone` rows; mark_manual_done: row no longer `awaiting_manual`), on any newer revision, or when n8n sends `clearPending: true`.
+
+### Outbound action webhook (dashboard → n8n)
+
+Single URL `N8N_REVIEW_WEBHOOK_URL` (e.g. `https://paranormaltours.duckdns.org/webhook/pt-content/review`), signed `X-PT-Signature: hex(HMAC-SHA256(N8N_WEBHOOK_SECRET, rawBody))`; `X-PT-Attempt` (unsigned) is `>1` on a founder Retry, which resends the identical body. Switch on `body.action`:
+
+```json
+{ "action": "approve", "packageId": "…", "revision": 2, "platforms": ["instagram","youtube"], "stages": [], "feedback": "", "toneChecked": true, "selectedTitle": "…", "actor": "founder", "at": "ISO" }
+{ "action": "reject",  "packageId": "…", "revision": 2, "platforms": [], "stages": ["script"], "feedback": "…", "actor": "founder", "at": "ISO" }
+{ "action": "kill",    "packageId": "…", "revision": 4, "platforms": [], "stages": [], "feedback": "", "actor": "founder", "at": "ISO" }
+{ "action": "confirm_tone", "packageId": "…", "revision": 1, "toneChecked": true, "actor": "founder", "at": "ISO" }
+{ "action": "mark_manual_done", "packageId": "…", "revision": 1, "platform": "tiktok", "actor": "founder", "at": "ISO" }
+```
+
+- `toneChecked` must be `true` to approve a SENSITIVE item (server-validated, per revision). `selectedTitle` is required when approving YouTube and `script.youtubeTitleOptions` exist, and must be one of them (no free text).
+- **Mock mode** (no `N8N_REVIEW_WEBHOOK_URL` + `N8N_WEBHOOK_SECRET`): EXAMPLE packages are seeded and actions apply instantly to the local cache (`approve` → chosen rows `approved`, other open rows `not_approved`; `reject` → `revising`, revision +1; `kill` → `killed`; `confirm_tone` → `held_tone` rows `approved`; `mark_manual_done` → row `posted_manual` with `postedAt`).
+- **Real mode**: no optimistic flip. The card shows "Approving… / Sending back… / Killing… / Confirming tone… / Marking posted…" (stored as `pendingAction { action, at, payload }`) until n8n posts the new state back. After 10 minutes it turns amber ("No response from n8n yet") with **Retry**. Example data is hidden unless `CONTENT_REVIEW_MOCK_SEED=1`.
+- **Storage**: Upstash Redis hash `pt:content-review:v2:packages` in production, `pt:content-review:<VERCEL_ENV>:v2:packages` elsewhere (preview/local never write production review data). Falls back to memory without Redis.
 - **Passcode**: set `REVIEW_ADMIN_PASSWORD` (and optionally `REVIEW_SESSION_SECRET`) to gate `/review` and the review APIs via `src/middleware.ts`. Without it the page shows an "Unprotected" banner.

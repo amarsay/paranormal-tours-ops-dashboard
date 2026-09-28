@@ -12,8 +12,12 @@ import {
   estimateRedoCostGbp,
   formatGbp,
   isAtCap,
+  platformStatus,
+  platformsInReview,
+  toneConfirmedForCurrent,
   validateAction,
 } from "@/lib/content-review-rules";
+import { ContentStatusChip } from "./ContentStatusChip";
 
 const STAGE_LABELS: Record<ReviewStage, string> = {
   script: "Script",
@@ -26,22 +30,29 @@ const STAGE_LABELS: Record<ReviewStage, string> = {
 export function ActionPanel({
   pkg,
   pending,
+  selectedTitle,
   onAction,
 }: {
   pkg: ContentPackage;
   pending: boolean;
+  /** Chosen YouTube title (null when there are no options or none picked yet). */
+  selectedTitle: string | null;
   onAction: (req: ReviewActionRequest) => Promise<boolean>;
 }) {
   const uid = useId();
-  const platformsKey = pkg.platforms.map((p) => p.platform).join(",");
+  // Only rows still in review can be approved; rows decided in the sheet are shown read-only.
+  const platformsKey = platformsInReview(pkg).join(",");
   const allPlatforms = useMemo(
     () => (platformsKey ? (platformsKey.split(",") as PlatformId[]) : []),
     [platformsKey]
   );
+  const partial = allPlatforms.length < pkg.platforms.length;
   const atCap = isAtCap(pkg);
+  const toneForRevision = toneConfirmedForCurrent(pkg);
 
   const [approveSet, setApproveSet] = useState<PlatformId[]>(allPlatforms);
-  const [toneChecked, setToneChecked] = useState(false);
+  // The tick is per revision: pre-checked only if confirmed for THIS revision.
+  const [toneChecked, setToneChecked] = useState(toneForRevision);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [stages, setStages] = useState<ReviewStage[]>([]);
@@ -54,13 +65,13 @@ export function ActionPanel({
   // Reset local form state when a new revision arrives.
   useEffect(() => {
     setApproveSet(allPlatforms);
-    setToneChecked(false);
+    setToneChecked(toneForRevision);
     setRejectOpen(false);
     setFeedback("");
     setStages([]);
     setRejectPlatforms([]);
     setKillConfirm(false);
-  }, [pkg.revision, allPlatforms]);
+  }, [pkg.revision, allPlatforms, toneForRevision]);
 
   useEffect(() => {
     if (rejectOpen) rejectHeadingRef.current?.focus();
@@ -73,6 +84,7 @@ export function ActionPanel({
     revision: pkg.revision,
     platforms: approveSet,
     toneChecked,
+    ...(selectedTitle && approveSet.includes("youtube") ? { selectedTitle } : {}),
   };
   const approveCheck = validateAction(pkg, approveReq);
   const allTicked = approveSet.length === allPlatforms.length;
@@ -99,19 +111,32 @@ export function ActionPanel({
     <div className="space-y-4 rounded-xl border border-white/5 bg-ink-950/40 p-3">
       {/* Approve */}
       <fieldset className="space-y-2" disabled={pending}>
-        <legend className="text-sm font-semibold text-ink-100">Approve</legend>
+        <legend className="text-sm font-semibold text-ink-100">
+          Approve{partial ? " remaining platforms" : ""}
+        </legend>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          {pkg.platforms.map((p) => (
-            <label key={p.platform} className="inline-flex items-center gap-1.5 text-xs text-ink-200">
-              <input
-                type="checkbox"
-                className="h-4 w-4 accent-teal-500"
-                checked={approveSet.includes(p.platform)}
-                onChange={() => setApproveSet((s) => toggle(s, p.platform))}
-              />
-              {PLATFORM_LABELS[p.platform]}
-            </label>
-          ))}
+          {pkg.platforms.map((p) => {
+            const st = platformStatus(pkg, p);
+            if (st !== "review") {
+              return (
+                <span key={p.platform} className="inline-flex items-center gap-1.5 text-xs text-ink-500">
+                  {PLATFORM_LABELS[p.platform]}
+                  <ContentStatusChip status={st} at={p.postedAt} />
+                </span>
+              );
+            }
+            return (
+              <label key={p.platform} className="inline-flex items-center gap-1.5 text-xs text-ink-200">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-teal-500"
+                  checked={approveSet.includes(p.platform)}
+                  onChange={() => setApproveSet((s) => toggle(s, p.platform))}
+                />
+                {PLATFORM_LABELS[p.platform]}
+              </label>
+            );
+          })}
           <button
             type="button"
             className="text-xs text-violet-200 underline-offset-2 hover:underline"
@@ -132,6 +157,7 @@ export function ActionPanel({
               I&apos;ve checked tone and CTA
               <span className="block text-xs text-rose-200/70">
                 Required for SENSITIVE items: respectful tone, no visit CTA for restricted sites.
+                Applies to revision {pkg.revision} only; a new revision needs a fresh tick.
               </span>
             </span>
           </label>
@@ -145,9 +171,11 @@ export function ActionPanel({
           >
             {pending
               ? "Working…"
-              : allTicked
+              : allTicked && !partial
                 ? "Approve all platforms"
-                : `Approve ${approveSet.length} platform${approveSet.length === 1 ? "" : "s"}`}
+                : allTicked
+                  ? `Approve remaining ${approveSet.length}`
+                  : `Approve ${approveSet.length} platform${approveSet.length === 1 ? "" : "s"}`}
           </button>
           {!approveCheck.ok && !pending && (
             <p className="text-xs text-ink-400" aria-live="polite">

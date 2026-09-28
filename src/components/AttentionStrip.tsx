@@ -62,6 +62,11 @@ export function AttentionStrip() {
                 <span className="inline-flex items-center rounded-full bg-violet-500/15 px-2.5 py-0.5 text-xs font-medium text-violet-300 ring-1 ring-violet-400/40">
                   {pendingContent} waiting
                 </span>
+                {(reviewSummary?.held ?? 0) > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-medium text-amber-200 ring-1 ring-amber-400/40">
+                    {reviewSummary?.held} held
+                  </span>
+                )}
                 {reviewSummary?.mock && (
                   <span className="text-[11px] text-amber-200/80">mock data</span>
                 )}

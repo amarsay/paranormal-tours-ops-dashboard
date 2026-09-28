@@ -21,7 +21,7 @@ export function BlockedList({ items }: { items: ContentPackage[] }) {
       ) : (
         <ul className="space-y-2">
           {items.map((p) => (
-            <li key={p.contentId} className="card border-rose-500/15 px-4 py-3">
+            <li key={p.packageId} className="card border-rose-500/15 px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="font-medium text-ink-100">{p.subject}</p>
                 {p.example && <ExampleTag />}
@@ -31,7 +31,7 @@ export function BlockedList({ items }: { items: ContentPackage[] }) {
                 — {REASONS[p.blockedReason ?? ""] ?? "Blocked by the pipeline."}
               </p>
               <p className="mt-1 text-xs text-ink-500">
-                {p.source.tab} · row {p.source.row} · cost {formatGbp(p.costActualGbp)} · {formatLondon(p.updatedAt)}
+                {p.sheetRef.tab} · row {p.sheetRef.row} · cost {formatGbp(p.costActualGbp)} · {formatLondon(p.updatedAt)}
               </p>
             </li>
           ))}
