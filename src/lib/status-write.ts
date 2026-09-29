@@ -4,13 +4,19 @@ import { LIVE_SCHEMA_VERSION, normaliseStoredRow } from "./live-types";
 import {
   LONE_SURROGATE,
   LUA_ROW_FIELDS,
+  StoreUnavailableError,
   memoryBucket,
   redisCommand,
   storageMode,
 } from "./live-store";
 import { PARKED_MAX_PER_AGENT, coerceBlocker } from "./parked-blockers";
 import { parkedMemory } from "./parked-store";
-import { STATUS_WRITE_LUA, parkedKey, statusRedisKey } from "./status-lua";
+import {
+  STATUS_WRITE_LUA,
+  parkedIndexKey,
+  parkedKey,
+  statusRedisKey,
+} from "./status-lua";
 
 export type RowWrite =
   | { mode: "full"; row: AgentOpsRow }
@@ -89,9 +95,10 @@ export async function writeStatus(
     const res = (await redisCommand([
       "EVAL",
       STATUS_WRITE_LUA,
-      2,
+      3,
       statusRedisKey(),
       parkedKey(input.agentId),
+      parkedIndexKey(),
       input.agentId,
       input.row?.mode ?? "none",
       input.row
@@ -113,7 +120,7 @@ export async function writeStatus(
     if (tag === "no_live_row" || tag === "blocker_limit") {
       return { ok: false, code: tag };
     }
-    if (tag !== "ok") throw new Error(`status write failed: ${String(tag)}`);
+    if (tag !== "ok") throw new StoreUnavailableError(`status write failed: ${String(tag)}`);
     const row = res[1] ? normaliseStoredRow(JSON.parse(res[1])) : null;
     let blocker: BlockerOutcome | undefined;
     if (b?.type === "park") {

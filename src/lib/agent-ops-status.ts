@@ -9,7 +9,14 @@ import type {
   AgentOpsRow,
   AgentOpsSnapshot,
 } from "./live-types";
-import { getSnapshot } from "./live-store";
+import {
+  StoreUnavailableError,
+  getSnapshot,
+  redisPipeline,
+  snapshotFromRaw,
+  storageMode,
+} from "./live-store";
+import { parkedIndexKey, statusRedisKey } from "./status-lua";
 import {
   PARKED_MAX_PER_AGENT,
   hasHeartbeatFields,
@@ -21,17 +28,27 @@ import { writeStatus } from "./status-write";
 /**
  * Snapshot for GET /api/agent-ops/status: the stored rows plus
  * `parkedBlockers` merged per row (legacy rows / no blockers → []).
- * If the blocker read fails the rows still come back, each with [].
+ *
+ * Redis: ONE pipeline round trip — GET status + SMEMBERS parked index
+ * (2 commands) — then HGETALL only for agents that have blockers. Any store
+ * error throws StoreUnavailableError (→ 503): no memory fallback and no
+ * silent [] for blockers, so a response is always one consistent store.
  */
 export async function getSnapshotWithBlockers(): Promise<AgentOpsSnapshot> {
-  const snap = await getSnapshot();
-  const ids = Object.keys(snap.agents);
-  let parked: Record<string, AgentOpsRow["parkedBlockers"]> = {};
-  try {
-    parked = await listParkedBlockers(ids);
-  } catch (err) {
-    console.error("[agent-ops] parked blockers read failed", err);
+  let snap: AgentOpsSnapshot;
+  let indexMembers: string[] | undefined;
+  if (storageMode() === "redis") {
+    const [raw, members] = await redisPipeline([
+      ["GET", statusRedisKey()],
+      ["SMEMBERS", parkedIndexKey()],
+    ]);
+    snap = snapshotFromRaw(raw);
+    indexMembers = Array.isArray(members) ? (members as string[]) : [];
+  } else {
+    snap = await getSnapshot();
   }
+  const ids = Object.keys(snap.agents);
+  const parked = await listParkedBlockers(ids, indexMembers);
   const agents: Record<string, AgentOpsRow> = {};
   for (const id of ids) {
     agents[id] = { ...snap.agents[id]!, parkedBlockers: parked[id] ?? [] };
@@ -44,12 +61,35 @@ export type StatusPostResult = {
   body: Record<string, unknown>;
 };
 
-async function blockersFor(agentId: string) {
+export const STORE_UNAVAILABLE_BODY = {
+  error: "Status store unavailable — nothing was applied",
+  code: "store_unavailable",
+} as const;
+
+/** 503 for a store error; other errors are rethrown (→ 500). */
+export function storeUnavailable(err: unknown, where: string): StatusPostResult {
+  if (!(err instanceof StoreUnavailableError)) throw err;
+  console.error(`[agent-ops] ${where}: store unavailable`, err.message);
+  return { status: 503, body: { ...STORE_UNAVAILABLE_BODY } };
+}
+
+/**
+ * Snapshot + this agent's blockers after a committed write. The write has
+ * already succeeded, so a read-back failure doesn't turn it into an error:
+ * the response says so (snapshot: null, snapshotError) instead of guessing.
+ */
+async function readBack(agentId: string) {
   try {
-    return (await listParkedBlockers([agentId]))[agentId] ?? [];
+    const snapshot = await getSnapshotWithBlockers();
+    const parkedBlockers =
+      snapshot.agents[agentId]?.parkedBlockers ??
+      (await listParkedBlockers([agentId]))[agentId] ??
+      [];
+    return { snapshot, parkedBlockers };
   } catch (err) {
-    console.error("[agent-ops] parked blockers read failed", err);
-    return [];
+    if (!(err instanceof StoreUnavailableError)) throw err;
+    console.error("[agent-ops] read-back after write failed", err.message);
+    return null;
   }
 }
 
@@ -80,7 +120,12 @@ export async function handleStatusPost(
   if (op.type === "none") {
     // Unchanged heartbeat path (a client-sent parkedBlockers array is simply
     // not read by applyHeartbeat).
-    const result = await applyHeartbeat(body);
+    let result: Awaited<ReturnType<typeof applyHeartbeat>>;
+    try {
+      result = await applyHeartbeat(body);
+    } catch (err) {
+      return storeUnavailable(err, "heartbeat write");
+    }
     if (!result.ok) {
       return {
         status: result.status,
@@ -90,13 +135,12 @@ export async function handleStatusPost(
         },
       };
     }
-    const snapshot = await getSnapshotWithBlockers();
-    const parkedBlockers =
-      snapshot.agents[result.row.agentId]?.parkedBlockers ??
-      (await blockersFor(result.row.agentId));
+    const back = await readBack(result.row.agentId);
     return {
       status: 200,
-      body: { ok: true, row: { ...result.row, parkedBlockers }, snapshot },
+      body: back
+        ? { ok: true, row: { ...result.row, parkedBlockers: back.parkedBlockers }, snapshot: back.snapshot }
+        : { ok: true, row: result.row, snapshot: null, snapshotError: "store_unavailable" },
     };
   }
 
@@ -124,14 +168,9 @@ export async function handleStatusPost(
       requireRow: op.type === "park" && !heartbeat,
     });
   } catch (err) {
+    // Store errors and unexpected script replies alike: nothing was applied.
     console.error("[agent-ops] status write failed", err);
-    return {
-      status: 503,
-      body: {
-        error: "Status store unavailable — nothing was applied",
-        code: "store_unavailable",
-      },
-    };
+    return { status: 503, body: { ...STORE_UNAVAILABLE_BODY } };
   }
 
   if (!result.ok) {
@@ -156,10 +195,14 @@ export async function handleStatusPost(
     };
   }
 
-  const snapshot = await getSnapshotWithBlockers();
-  const parkedBlockers =
-    snapshot.agents[resolved.id]?.parkedBlockers ??
-    (await blockersFor(resolved.id));
+  const back = await readBack(resolved.id);
+  if (!back) {
+    return {
+      status: 200,
+      body: { ok: true, row: result.row, blocker, snapshot: null, snapshotError: "store_unavailable" },
+    };
+  }
+  const { snapshot, parkedBlockers } = back;
   return {
     status: 200,
     body: {

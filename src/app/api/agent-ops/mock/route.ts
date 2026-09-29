@@ -7,6 +7,7 @@ import { listRosterAgents } from "@/lib/roster-resolve";
 import { requireWriteToken } from "@/lib/ops-auth";
 import { assertWriteToken } from "@/lib/live-store";
 import { mockWritePolicy } from "@/lib/mock-policy";
+import { withStore } from "@/lib/store-response";
 import type { AgentOpsRow } from "@/lib/live-types";
 
 export const dynamic = "force-dynamic";
@@ -215,6 +216,10 @@ async function runMockTick() {
 }
 
 export async function GET(req: Request) {
+  return withStore("mock GET", () => mockGet(req));
+}
+
+async function mockGet(req: Request) {
   const policy = mockWritePolicy();
   if (policy === "disabled") {
     return readOnly("Mock writes are disabled in production.");
@@ -240,6 +245,10 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const denied = requireWriteToken(req);
   if (denied) return denied;
+  return withStore("mock POST", () => mockPost(req));
+}
+
+async function mockPost(req: Request) {
   if (mockWritePolicy() === "disabled") {
     return NextResponse.json(
       { error: "Mock writes are disabled in production.", code: "mock_disabled" },

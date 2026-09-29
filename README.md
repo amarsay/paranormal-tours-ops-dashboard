@@ -28,6 +28,10 @@ Open http://localhost:3000
 
 Without Upstash, the API uses an **in-memory Map** (fine for `next dev` / single Node process). On Vercel you **must** set Upstash or heartbeats will not persist across isolates.
 
+**No memory fallback.** Once Redis is configured, every Redis error (quota, network, bad reply) makes the request fail with **`503 { "code": "store_unavailable" }`**: writes are never "accepted" into one serverless instance's memory, and reads never mix the in-memory copy with Redis. In production (`VERCEL_ENV=production`) without Redis every request is 503 too. The dashboard shows a sync error and keeps the last good data.
+
+**Command budget (Upstash bills every command, incl. each pipeline entry and each `redis.call` inside a script; the Free plan allows 500k/month).** Status GET = 2 commands (`GET` status + `SMEMBERS pt:agent-ops:parked-index:v1`, one pipeline) + one `HGETALL` per agent that actually has parked blockers. Heartbeat POST = 1 `EVAL` (+ its inner `GET`/`SET`) + the 2-command read-back for the response. The index set is maintained by the write script (added on park, removed when an agent's last blocker is cleared).
+
 ## Live status API (Spectre contract)
 
 Primary path (Spectre):
