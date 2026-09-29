@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { applyHeartbeat } from "@/lib/apply-heartbeat";
 import { getSnapshotWithBlockers } from "@/lib/agent-ops-status";
 import { replaceAgents, storageMode } from "@/lib/live-store";
-import { clearBlocker, parkBlocker } from "@/lib/parked-store";
+import { writeStatus } from "@/lib/status-write";
 import { listRosterAgents } from "@/lib/roster-resolve";
 import { requireWriteToken } from "@/lib/ops-auth";
 import type { AgentOpsRow } from "@/lib/live-types";
@@ -187,11 +187,17 @@ async function runMockTick() {
       updatedAt: now,
     });
     for (const b of m.blockers) {
-      await parkBlocker(m.agentId, {
-        id: b.id,
-        title: b.title,
-        reason: b.reason,
-        since: new Date(nowMs - b.ageMs).toISOString(),
+      await writeStatus({
+        agentId: m.agentId,
+        blocker: {
+          type: "park",
+          blocker: {
+            id: b.id,
+            title: b.title,
+            reason: b.reason,
+            since: new Date(nowMs - b.ageMs).toISOString(),
+          },
+        },
       });
     }
   }
@@ -224,7 +230,12 @@ export async function POST(req: Request) {
     await replaceAgents({} as Record<string, AgentOpsRow>);
     // Only the example blockers — never real ones.
     for (const m of MOCK_PARKED) {
-      for (const b of m.blockers) await clearBlocker(m.agentId, b.id);
+      for (const b of m.blockers) {
+        await writeStatus({
+          agentId: m.agentId,
+          blocker: { type: "clear", id: b.id },
+        });
+      }
     }
     globalThis.__ptMockTick = 0;
     const snap = await getSnapshotWithBlockers();

@@ -20,14 +20,14 @@ export function ParkedBlockerList({
   className?: string;
 }) {
   return (
-    <ul className={`space-y-2 ${className}`}>
+    <ul className={`min-w-0 space-y-2 ${className}`}>
       {blockers.map((b) => (
         <li
           key={b.id}
-          className="rounded-lg bg-amber-500/[0.06] px-3 py-2 ring-1 ring-amber-400/15"
+          className="min-w-0 rounded-lg bg-amber-500/[0.06] px-3 py-2 ring-1 ring-amber-400/15"
         >
           <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-            <p className="min-w-0 break-words text-sm font-medium text-amber-100">
+            <p className="min-w-0 max-w-full text-sm font-medium text-amber-100 [overflow-wrap:anywhere]">
               {b.title}
             </p>
             <time
@@ -39,7 +39,9 @@ export function ParkedBlockerList({
             </time>
           </div>
           {b.reason && (
-            <p className="mt-0.5 break-words text-xs text-ink-300">{b.reason}</p>
+            <p className="mt-0.5 min-w-0 text-xs text-ink-300 [overflow-wrap:anywhere]">
+              {b.reason}
+            </p>
           )}
         </li>
       ))}
@@ -76,7 +78,11 @@ export function ParkedBlockersChip({
   }
 
   return (
-    <div className="mt-3" onKeyDown={onKeyDown} data-parked-chip={agent.id}>
+    <div
+      className="mt-3 min-w-0"
+      onKeyDown={onKeyDown}
+      data-parked-chip={agent.id}
+    >
       <button
         ref={buttonRef}
         type="button"

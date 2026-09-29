@@ -95,10 +95,10 @@ export function AgentDetail({ slug }: { slug: string }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+        <div className="min-w-0 space-y-4 lg:col-span-2">
           <div className="card p-4">
             <h2 className="text-sm font-semibold text-ink-100">Current task</h2>
-            <p className="mt-2 text-ink-200">
+            <p className="mt-2 text-ink-200 [overflow-wrap:anywhere]">
               {agent.currentTask ?? "Idle — assign work below."}
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -123,7 +123,7 @@ export function AgentDetail({ slug }: { slug: string }) {
           </div>
 
           <div
-            className={`card p-4 ${offlineDimClass(offlineDim.dimmed)}`}
+            className={`card min-w-0 p-4 ${offlineDimClass(offlineDim.dimmed)}`}
             id="parked-blockers"
           >
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
@@ -201,7 +201,7 @@ export function AgentDetail({ slug }: { slug: string }) {
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="card p-4">
             <h2 className="mb-3 text-sm font-semibold text-ink-100">
               Task history

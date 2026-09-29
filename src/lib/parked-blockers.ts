@@ -19,9 +19,15 @@ export const PARKED_TITLE_MAX = 120;
 export const PARKED_REASON_MAX = 280;
 export const PARKED_MAX_PER_AGENT = 10;
 
-/** ISO 8601 date-time with an explicit zone (Z or ±HH:MM). */
-const ISO_8601_RE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/;
+/**
+ * Strict ISO 8601 UTC date-time: YYYY-MM-DDTHH:MM[:SS[.fraction]]Z.
+ * Only the `Z` designator is accepted (no offsets, no date-only forms).
+ */
+const ISO_8601_UTC_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(\.\d{1,9})?)?Z$/;
+
+/** A client `since` may be at most this far ahead of the server clock. */
+export const SINCE_MAX_FUTURE_SKEW_MS = 120_000;
 
 export type BlockerOp =
   | { type: "none" }
@@ -32,20 +38,54 @@ export type BlockerOp =
     }
   | { type: "clear"; id: string };
 
+/** Machine-readable error codes (returned as `code` alongside `error`). */
+export type BlockerErrorCode =
+  | "invalid_blocker"
+  | "invalid_since"
+  | "since_in_future"
+  | "no_live_row"
+  | "blocker_limit";
+
 export type ParseResult =
   | { ok: true; op: BlockerOp }
-  | { ok: false; error: string };
+  | { ok: false; code: BlockerErrorCode; error: string };
+
+/**
+ * Length in Unicode code points (not UTF-16 units), so an emoji counts as 1
+ * (a ZWJ sequence such as 👨‍👩‍👧 still counts as its 5 code points).
+ */
+export function codePointLength(s: string): number {
+  return Array.from(s).length;
+}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Normalise an ISO 8601 string to UTC `toISOString()` form, or null. */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * Parse a strict ISO 8601 UTC string (see ISO_8601_UTC_RE) that names a real
+ * calendar date/time — 2026-02-30, 2026-13-01, 25:00, :60 are rejected rather
+ * than rolled over. Returns the canonical `toISOString()` form, or null.
+ */
 export function normaliseIsoUtc(raw: unknown): string | null {
-  if (typeof raw !== "string" || !ISO_8601_RE.test(raw)) return null;
-  const t = Date.parse(raw);
-  if (!Number.isFinite(t)) return null;
-  return new Date(t).toISOString();
+  if (typeof raw !== "string") return null;
+  const m = ISO_8601_UTC_RE.exec(raw);
+  if (!m) return null;
+  const [year, month, day, hour, minute] = m.slice(1, 6).map(Number) as [
+    number, number, number, number, number,
+  ];
+  const second = m[6] ? Number(m[6]) : 0;
+  if (year < 1970) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  const ms = m[7] ? Math.floor(Number(`0${m[7]}`) * 1000) : 0;
+  const t = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
 
 /**
@@ -53,7 +93,10 @@ export function normaliseIsoUtc(raw: unknown): string | null {
  * `parkBlocker` / `clearBlocker` mean "no op". Sending both is rejected
  * (one blocker op per POST keeps each write a single atomic store op).
  */
-export function parseBlockerOp(body: unknown): ParseResult {
+export function parseBlockerOp(
+  body: unknown,
+  nowMs: number = Date.now()
+): ParseResult {
   if (!isPlainObject(body)) return { ok: true, op: { type: "none" } };
   const park = body.parkBlocker;
   const clear = body.clearBlocker;
@@ -63,6 +106,7 @@ export function parseBlockerOp(body: unknown): ParseResult {
   if (hasPark && hasClear) {
     return {
       ok: false,
+      code: "invalid_blocker",
       error: "Send either parkBlocker or clearBlocker, not both",
     };
   }
@@ -71,6 +115,7 @@ export function parseBlockerOp(body: unknown): ParseResult {
     if (typeof clear !== "string" || !PARKED_ID_RE.test(clear)) {
       return {
         ok: false,
+        code: "invalid_blocker",
         error: "clearBlocker must be a blocker id matching ^[a-z0-9-]{1,64}$",
       };
     }
@@ -79,30 +124,37 @@ export function parseBlockerOp(body: unknown): ParseResult {
 
   if (hasPark) {
     if (!isPlainObject(park)) {
-      return { ok: false, error: "parkBlocker must be an object" };
+      return {
+        ok: false,
+        code: "invalid_blocker",
+        error: "parkBlocker must be an object",
+      };
     }
     const { id, title, reason, since } = park;
+    const bad = (error: string): ParseResult => ({
+      ok: false,
+      code: "invalid_blocker",
+      error,
+    });
     if (typeof id !== "string" || !PARKED_ID_RE.test(id)) {
-      return {
-        ok: false,
-        error: "parkBlocker.id must match ^[a-z0-9-]{1,64}$",
-      };
+      return bad("parkBlocker.id must match ^[a-z0-9-]{1,64}$");
     }
+    // Lengths are Unicode code points of the trimmed string.
+    const titleTrim = typeof title === "string" ? title.trim() : "";
     if (
       typeof title !== "string" ||
-      title.trim().length === 0 ||
-      title.length > PARKED_TITLE_MAX
+      titleTrim.length === 0 ||
+      codePointLength(titleTrim) > PARKED_TITLE_MAX
     ) {
-      return {
-        ok: false,
-        error: `parkBlocker.title must be a non-empty string of at most ${PARKED_TITLE_MAX} characters`,
-      };
+      return bad(
+        `parkBlocker.title must be a non-empty string of at most ${PARKED_TITLE_MAX} characters (Unicode code points, after trimming)`
+      );
     }
-    if (typeof reason !== "string" || reason.length > PARKED_REASON_MAX) {
-      return {
-        ok: false,
-        error: `parkBlocker.reason must be a string of at most ${PARKED_REASON_MAX} characters`,
-      };
+    const reasonTrim = typeof reason === "string" ? reason.trim() : "";
+    if (typeof reason !== "string" || codePointLength(reasonTrim) > PARKED_REASON_MAX) {
+      return bad(
+        `parkBlocker.reason must be a string of at most ${PARKED_REASON_MAX} characters (Unicode code points, after trimming)`
+      );
     }
     let sinceIso: string | undefined;
     if (since !== undefined && since !== null) {
@@ -110,7 +162,16 @@ export function parseBlockerOp(body: unknown): ParseResult {
       if (!n) {
         return {
           ok: false,
-          error: "parkBlocker.since must be an ISO 8601 date-time with a zone",
+          code: "invalid_since",
+          error:
+            "parkBlocker.since must be a real ISO 8601 UTC date-time, e.g. 2026-09-29T08:15:00Z",
+        };
+      }
+      if (Date.parse(n) > nowMs + SINCE_MAX_FUTURE_SKEW_MS) {
+        return {
+          ok: false,
+          code: "since_in_future",
+          error: `parkBlocker.since is in the future (more than ${SINCE_MAX_FUTURE_SKEW_MS / 1000}s ahead of the server clock)`,
         };
       }
       sinceIso = n;
@@ -121,8 +182,8 @@ export function parseBlockerOp(body: unknown): ParseResult {
         type: "park",
         blocker: {
           id,
-          title: title.trim(),
-          reason: reason.trim(),
+          title: titleTrim,
+          reason: reasonTrim,
           ...(sinceIso ? { since: sinceIso } : {}),
         },
       },
@@ -132,24 +193,32 @@ export function parseBlockerOp(body: unknown): ParseResult {
   return { ok: true, op: { type: "none" } };
 }
 
-/** Keys that identify the agent rather than carry heartbeat state. */
-const NON_HEARTBEAT_KEYS = new Set([
-  "agentId",
-  "agentName",
-  "name",
-  "slug",
-  "parkBlocker",
-  "clearBlocker",
-  "parkedBlockers",
-]);
-
 /**
- * True when the body carries any heartbeat field. A blocker-only POST
- * (identity + parkBlocker/clearBlocker) must not reset the live row to idle.
+ * Heartbeat fields a POST may carry (anything else — identity, blocker
+ * actions, unknown keys — is not a heartbeat field).
  */
+export const HEARTBEAT_KEYS = [
+  "status",
+  "presence",
+  "taskTitle",
+  "currentTask",
+  "notes",
+  "message",
+  "correlationId",
+  "handoffTo",
+  "blockerReason",
+  "taskState",
+  "taskStatus",
+  "heartbeatAt",
+  "updatedAt",
+  "at",
+  "taskId",
+] as const;
+
+/** True when the body carries at least one heartbeat field. */
 export function hasHeartbeatFields(body: unknown): boolean {
-  if (!isPlainObject(body)) return true;
-  return Object.keys(body).some((k) => !NON_HEARTBEAT_KEYS.has(k));
+  if (!isPlainObject(body)) return false;
+  return HEARTBEAT_KEYS.some((k) => Object.prototype.hasOwnProperty.call(body, k));
 }
 
 /** Oldest first, then id — stable order for cards / Needs you. */

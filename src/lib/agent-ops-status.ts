@@ -1,13 +1,22 @@
-import { applyHeartbeat } from "./apply-heartbeat";
+import {
+  applyHeartbeat,
+  buildHeartbeatPatch,
+  buildHeartbeatRow,
+  resolveHeartbeatAgent,
+} from "./apply-heartbeat";
 import type {
   AgentOpsHeartbeatBody,
   AgentOpsRow,
   AgentOpsSnapshot,
 } from "./live-types";
 import { getSnapshot } from "./live-store";
-import { hasHeartbeatFields, parseBlockerOp } from "./parked-blockers";
-import { clearBlocker, listParkedBlockers, parkBlocker } from "./parked-store";
-import { resolveRosterAgent } from "./roster-resolve";
+import {
+  PARKED_MAX_PER_AGENT,
+  hasHeartbeatFields,
+  parseBlockerOp,
+} from "./parked-blockers";
+import { listParkedBlockers } from "./parked-store";
+import { writeStatus } from "./status-write";
 
 /**
  * Snapshot for GET /api/agent-ops/status: the stored rows plus
@@ -35,23 +44,37 @@ export type StatusPostResult = {
   body: Record<string, unknown>;
 };
 
+async function blockersFor(agentId: string) {
+  try {
+    return (await listParkedBlockers([agentId]))[agentId] ?? [];
+  } catch (err) {
+    console.error("[agent-ops] parked blockers read failed", err);
+    return [];
+  }
+}
+
 /**
  * POST /api/agent-ops/status after auth + JSON parse.
  *
- * Legacy bodies (no parkBlocker / clearBlocker) take exactly the old path:
- * applyHeartbeat → { ok, row, snapshot }.
+ * Plain heartbeat (no parkBlocker / clearBlocker): unchanged full-row
+ * replace — omitted fields reset to defaults. Response `row` now also carries
+ * the agent's `parkedBlockers` (same as the snapshot row).
  *
- * With a blocker op, everything that can fail is checked before anything is
- * written: blocker validation (400), agent resolution (404), then the single
- * atomic blocker op (409 cap / 503 store error). Only after that succeeds is
- * the heartbeat (if the body has heartbeat fields) applied. A blocker-only
- * POST leaves the live status/task row untouched.
+ * With a blocker action, all validation (400) and agent resolution (404)
+ * happen before any write; then ONE atomic store op does, together:
+ *  - the blocker action (park cap → 409 blocker_limit), and
+ *  - a PARTIAL row update: only the heartbeat fields actually sent are merged
+ *    onto the stored row (a blocker-only POST leaves the row untouched).
+ * Parking for an agent with no stored row and no heartbeat fields → 409
+ * no_live_row (nothing stored). Store errors → 503, nothing applied.
  */
 export async function handleStatusPost(
   body: AgentOpsHeartbeatBody
 ): Promise<StatusPostResult> {
   const parsed = parseBlockerOp(body);
-  if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
+  if (!parsed.ok) {
+    return { status: 400, body: { error: parsed.error, code: parsed.code } };
+  }
   const { op } = parsed;
 
   if (op.type === "none") {
@@ -62,55 +85,66 @@ export async function handleStatusPost(
       return { status: result.status, body: { error: result.error } };
     }
     const snapshot = await getSnapshotWithBlockers();
-    return { status: 200, body: { ok: true, row: result.row, snapshot } };
-  }
-
-  const resolved = resolveRosterAgent({
-    agentId: body.agentId,
-    agentName: body.agentName || body.name,
-    name: body.name,
-    slug: body.slug,
-  });
-  if (!resolved) return { status: 404, body: { error: "Unknown agent" } };
-
-  let blockerResult: Record<string, unknown>;
-  try {
-    if (op.type === "park") {
-      const res = await parkBlocker(resolved.id, op.blocker);
-      if (!res.ok) return { status: res.status, body: { error: res.error } };
-      blockerResult = { op: "park", result: res.result, blocker: res.blocker };
-    } else {
-      const removed = await clearBlocker(resolved.id, op.id);
-      blockerResult = { op: "clear", id: op.id, removed };
-    }
-  } catch (err) {
-    console.error("[agent-ops] parked blocker write failed", err);
+    const parkedBlockers =
+      snapshot.agents[result.row.agentId]?.parkedBlockers ??
+      (await blockersFor(result.row.agentId));
     return {
-      status: 503,
-      body: { error: "Parked blocker store unavailable — nothing was applied" },
+      status: 200,
+      body: { ok: true, row: { ...result.row, parkedBlockers }, snapshot },
     };
   }
 
-  let row: AgentOpsRow | null = null;
-  if (hasHeartbeatFields(body)) {
-    const result = await applyHeartbeat(body);
-    // Agent already resolved above, so applyHeartbeat can't 404 here.
-    if (result.ok) row = result.row;
+  const resolved = resolveHeartbeatAgent(body);
+  if (!resolved) return { status: 404, body: { error: "Unknown agent" } };
+
+  const now = new Date().toISOString();
+  const heartbeat = hasHeartbeatFields(body);
+  let result: Awaited<ReturnType<typeof writeStatus>>;
+  try {
+    result = await writeStatus({
+      agentId: resolved.id,
+      blocker: op,
+      row: heartbeat
+        ? {
+            mode: "merge",
+            patch: buildHeartbeatPatch(body, resolved, now),
+            createRow: buildHeartbeatRow(body, resolved, now),
+          }
+        : undefined,
+      // A blocker-only park must attach to a live row, or it would be stored
+      // but invisible (GET only lists agents that have a row).
+      requireRow: op.type === "park" && !heartbeat,
+    });
+  } catch (err) {
+    console.error("[agent-ops] status write failed", err);
+    return {
+      status: 503,
+      body: {
+        error: "Status store unavailable — nothing was applied",
+        code: "store_unavailable",
+      },
+    };
+  }
+
+  if (!result.ok) {
+    const error =
+      result.code === "no_live_row"
+        ? `${resolved.name} has no live status row yet — send a heartbeat first (or include heartbeat fields in this POST). Nothing was stored.`
+        : `${resolved.name} already has ${PARKED_MAX_PER_AGENT} parked blockers — clear one first. Nothing was applied.`;
+    return { status: 409, body: { error, code: result.code } };
   }
 
   const snapshot = await getSnapshotWithBlockers();
-  const current = snapshot.agents[resolved.id];
   const parkedBlockers =
-    current?.parkedBlockers ??
-    (await listParkedBlockers([resolved.id]))[resolved.id] ??
-    [];
+    snapshot.agents[resolved.id]?.parkedBlockers ??
+    (await blockersFor(resolved.id));
   return {
     status: 200,
     body: {
       ok: true,
-      row: row ? { ...row, parkedBlockers } : (current ?? null),
+      row: result.row ? { ...result.row, parkedBlockers } : null,
       parkedBlockers,
-      blocker: blockerResult,
+      blocker: result.blocker,
       snapshot,
     },
   };

@@ -134,14 +134,42 @@ including rows written before this feature):
 | `parkedBlockers: […]` | **Ignored** — the server owns the list. |
 
 - Neither field → the list is untouched (existing reporters behave exactly as before).
-- Validation: `id` `^[a-z0-9-]{1,64}$`; `title` 1–120 chars; `reason` ≤280
-  (may be empty); `since` ISO 8601 with a zone (stored as UTC); max **10**
-  per agent (11th → `409`). One blocker op per POST (both → `400`).
-- Malformed → `400` and the **whole** POST is rejected, heartbeat fields
-  included — nothing is half-applied. Unknown agent → `404`.
-- A POST with only identity (`agentId` / `agentName`) + a blocker op leaves
-  the live status/task row alone; add heartbeat fields to update both at once.
-- Response: `{ ok, row, parkedBlockers, blocker: { op, … }, snapshot }`.
+- Validation (all checked before anything is written):
+  - `id` `^[a-z0-9-]{1,64}$`.
+  - `title` 1–120 and `reason` 0–280 **Unicode code points** after trimming
+    leading/trailing whitespace (stored trimmed). `"👻".repeat(120)` passes; a
+    ZWJ emoji such as 👨‍👩‍👧 counts as its 5 code points.
+  - `since` strict ISO 8601 **UTC** — `YYYY-MM-DDTHH:MM[:SS[.fff…]]Z` — naming a
+    real calendar date/time (`2026-02-30`, `24:00`, `:60`, offsets such as
+    `+01:00` are rejected, not rolled over) and not more than **2 minutes** in the
+    future (clock skew).
+  - One blocker action per POST (both → `400`).
+- Errors carry `{ error, code }`:
+
+  | HTTP | `code` | When |
+  |------|--------|------|
+  | 400 | `invalid_blocker` | bad id / title / reason / shape, or both actions |
+  | 400 | `invalid_since` | `since` not strict ISO 8601 UTC or not a real date |
+  | 400 | `since_in_future` | `since` > server time + 2 min |
+  | 409 | `blocker_limit` | 11th blocker for the agent |
+  | 409 | `no_live_row` | park for an agent that has never heartbeated, with no heartbeat fields in the POST (would be invisible) |
+  | 503 | `store_unavailable` | Redis error |
+
+  On any error the **whole** POST is rejected, heartbeat fields included.
+  Unknown agent → `404`.
+- **Partial update:** a POST that carries a blocker action merges only the
+  heartbeat fields it actually sends onto the stored row (plus
+  `heartbeatAt`/`updatedAt`, defaulting to server time). A blocker-only POST
+  (`agentId` + `parkBlocker`/`clearBlocker`) leaves the row untouched. If the
+  agent has no row yet and the POST has heartbeat fields, a row is created
+  from them.
+- **Plain heartbeats** (no blocker action) keep the long-standing **full-row**
+  semantics: omitted fields reset to defaults (`idle` / `null`). Kept on
+  purpose so a reporter that drops `blockerReason` / `taskTitle` still clears
+  them, and existing reporters behave identically.
+- `clearBlocker` works even for an agent with no row (cleans up stray hashes).
+- Response: `{ ok, row, parkedBlockers, blocker: { op, … }, snapshot }`; a
+  plain heartbeat's `row` also includes `parkedBlockers`.
 
 ```bash
 # park (upsert)
@@ -167,14 +195,19 @@ curl -sS -X POST https://<deployment>/api/agent-ops/status \
   -d '{ "agentId": "sid", "clearBlocker": "tailscale-ssh" }'
 ```
 
-**Storage / concurrency.** Blockers are *not* kept in the shared status JSON
-blob (which every heartbeat read-modify-writes). Each agent has its own Redis
-hash `pt:agent-ops:parked:v1:<agentId>` keyed by blocker id. Park is a single
-Lua `EVAL` (atomic in Redis: keep existing `since`, enforce the cap, `HSET`);
-clear is `HDEL`; GET pipelines one `HGETALL` per row. So concurrent parks can't
-exceed the cap or lose `since`, and heartbeats can't clobber blockers. In
-memory mode every op is synchronous in one process. A store error on a
-blocker op returns `503` with nothing applied.
+**Storage / concurrency.** The data layout is unchanged from production:
+rows stay in the JSON string `pt:agent-ops:status:v1`; parked blockers live in
+a per-agent Redis hash `pt:agent-ops:parked:v1:<agentId>` keyed by blocker id.
+Every write — plain heartbeat or blocker POST — is **one Lua `EVAL`**
+(`src/lib/status-lua.ts`), which Redis runs atomically: it decodes the JSON,
+updates only that agent's row (replace or merge), applies the park/clear
+(keeping an existing `since`, enforcing the cap, checking the row exists) and
+re-encodes. There's no GET-then-SET window any more, so concurrent heartbeats
+for different agents can't drop each other's rows (previously the last `SET`
+won), and a blocker action and its heartbeat fields commit together or not at
+all. No migration: old code can still read (and write) the key, so rollback
+is safe. GET pipelines one `HGETALL` per row. In memory mode every op is
+synchronous in one process.
 
 **UI.** Cards show an amber “N parked blocker(s)” chip that discloses the list
 (title, reason, “waiting 2d 3h”); **Needs you** has a separate *Parked

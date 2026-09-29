@@ -90,7 +90,7 @@ export function AgentsGrid() {
         {filtered.map((agent) => (
           <div
             key={agent.id}
-            className="card group p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
+            className="card group min-w-0 p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
           >
             <Link href={`/agents/${agent.id}`} className="block">
             <div className="flex items-start justify-between gap-2">
@@ -108,7 +108,7 @@ export function AgentsGrid() {
             <p className="mt-3 text-xs uppercase tracking-wider text-ink-500">
               {agent.squad}
             </p>
-            <p className="mt-1 line-clamp-2 text-sm text-ink-300">
+            <p className="mt-1 line-clamp-2 text-sm text-ink-300 [overflow-wrap:anywhere]">
               {agent.currentTask ?? "No current task"}
             </p>
             <p className="mt-2 text-xs text-ink-500">

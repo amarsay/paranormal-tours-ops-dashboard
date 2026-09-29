@@ -1,7 +1,9 @@
 import type { AgentOpsRow, AgentOpsSnapshot } from "./live-types";
 import { LIVE_SCHEMA_VERSION } from "./live-types";
+import { STATUS_REDIS_KEY, STATUS_WRITE_LUA, parkedKey } from "./status-lua";
 
-const REDIS_KEY = "pt:agent-ops:status:v1";
+export { STATUS_REDIS_KEY };
+const REDIS_KEY = STATUS_REDIS_KEY;
 
 type MemoryBucket = {
   revision: number;
@@ -20,6 +22,10 @@ function emptyBucket(): MemoryBucket {
     updatedAt: new Date().toISOString(),
     agents: {},
   };
+}
+
+export function memoryBucket(): MemoryBucket {
+  return getMemory();
 }
 
 function getMemory(): MemoryBucket {
@@ -98,6 +104,10 @@ export async function redisPipeline(commands: unknown[][]): Promise<unknown[]> {
   });
 }
 
+/** cjson (Lua) rejects lone UTF-16 surrogates; they become U+FFFD. */
+export const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 export function storageMode(): "redis" | "memory" {
   return redisConfigured() ? "redis" : "memory";
 }
@@ -136,23 +146,43 @@ export async function getSnapshot(): Promise<AgentOpsSnapshot> {
   };
 }
 
-export async function upsertAgentRow(row: AgentOpsRow): Promise<AgentOpsSnapshot> {
+/**
+ * Full-row replace for one agent (plain heartbeat).
+ *
+ * Redis: a single atomic EVAL (STATUS_WRITE_LUA, rowMode "full") that updates
+ * only this agent inside the existing JSON key. The old GET-then-SET lost rows
+ * when heartbeats for different agents raced (the last SET won). On a Redis
+ * error it still falls back to memory, as before.
+ */
+export async function upsertAgentRow(row: AgentOpsRow): Promise<void> {
   const storage = storageMode();
   const now = new Date().toISOString();
 
   if (storage === "redis") {
     try {
-      const current = await getSnapshot();
-      const next: Omit<AgentOpsSnapshot, "storage"> = {
-        schemaVersion: LIVE_SCHEMA_VERSION,
-        updatedAt: now,
-        agents: {
-          ...current.agents,
-          [row.agentId]: row,
-        },
-      };
-      await redisCommand(["SET", REDIS_KEY, JSON.stringify(next)]);
-      return { ...next, storage: "redis" };
+      const res = (await redisCommand([
+        "EVAL",
+        STATUS_WRITE_LUA,
+        2,
+        REDIS_KEY,
+        parkedKey(row.agentId),
+        row.agentId,
+        "full",
+        JSON.stringify(row, (_k, v) =>
+          typeof v === "string" ? v.replace(LONE_SURROGATE, "\uFFFD") : v
+        ),
+        "",
+        now,
+        LIVE_SCHEMA_VERSION,
+        "0",
+        "none",
+        "",
+        "",
+        "",
+        0,
+      ])) as string[];
+      if (res?.[0] !== "ok") throw new Error(`status write failed: ${String(res?.[0])}`);
+      return;
     } catch (err) {
       console.error("[agent-ops] redis set failed, using memory", err);
     }
@@ -162,12 +192,6 @@ export async function upsertAgentRow(row: AgentOpsRow): Promise<AgentOpsSnapshot
   mem.revision += 1;
   mem.updatedAt = now;
   mem.agents[row.agentId] = row;
-  return {
-    schemaVersion: LIVE_SCHEMA_VERSION,
-    updatedAt: mem.updatedAt,
-    agents: { ...mem.agents },
-    storage: "memory",
-  };
 }
 
 export async function replaceAgents(

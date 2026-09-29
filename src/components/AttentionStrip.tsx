@@ -98,7 +98,7 @@ export function AttentionStrip() {
                   {agent.currentTask ?? "No task title"}
                 </p>
                 {agent.blockerReason && (
-                  <p className="mt-1 text-xs text-rose-200/80">
+                  <p className="mt-1 text-xs text-rose-200/80 [overflow-wrap:anywhere]">
                     {agent.blockerReason}
                   </p>
                 )}
@@ -136,7 +136,7 @@ export function AttentionStrip() {
             {parked.map(({ agent, blocker }) => (
               <li
                 key={`${agent.id}:${blocker.id}`}
-                className="card flex flex-wrap items-start justify-between gap-x-3 gap-y-1 border-amber-500/20 bg-amber-950/10 px-4 py-3"
+                className="card flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1 border-amber-500/20 bg-amber-950/10 px-4 py-3"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -146,12 +146,12 @@ export function AttentionStrip() {
                     >
                       {agent.name}
                     </Link>
-                    <span className="break-words text-sm text-amber-100">
+                    <span className="min-w-0 max-w-full text-sm text-amber-100 [overflow-wrap:anywhere]">
                       {blocker.title}
                     </span>
                   </div>
                   {blocker.reason && (
-                    <p className="mt-1 break-words text-xs text-ink-300">
+                    <p className="mt-1 min-w-0 text-xs text-ink-300 [overflow-wrap:anywhere]">
                       {blocker.reason}
                     </p>
                   )}

@@ -102,11 +102,11 @@ export function OverviewAgents() {
                 </div>
                 <AgentStatusChip status={presence} />
               </div>
-              <p className="mt-3 line-clamp-2 text-sm text-ink-300">
+              <p className="mt-3 line-clamp-2 text-sm text-ink-300 [overflow-wrap:anywhere]">
                 {agent.currentTask ?? "No current task"}
               </p>
               {agent.blockerReason && (
-                <p className="mt-1 line-clamp-1 text-xs text-rose-300/80">
+                <p className="mt-1 line-clamp-1 text-xs text-rose-300/80 [overflow-wrap:anywhere]">
                   {agent.blockerReason}
                 </p>
               )}
