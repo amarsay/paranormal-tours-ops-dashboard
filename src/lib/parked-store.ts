@@ -1,7 +1,7 @@
 import type { ParkedBlocker } from "@/types";
 import { redisPipeline, storageMode } from "./live-store";
 import { coerceBlocker, sortBlockers } from "./parked-blockers";
-import { PARKED_KEY_PREFIX, parkedKey } from "./status-lua";
+import { parkedKey, parkedKeyPrefix } from "./status-lua";
 
 /**
  * Parked-blocker reads + in-memory store. Writes (park / clear, together with
@@ -12,7 +12,7 @@ import { PARKED_KEY_PREFIX, parkedKey } from "./status-lua";
  * value '{"since":"…","id":…,"title":…,"reason":…}'.
  */
 
-export { PARKED_KEY_PREFIX, parkedKey };
+export { parkedKey, parkedKeyPrefix };
 
 declare global {
   // eslint-disable-next-line no-var

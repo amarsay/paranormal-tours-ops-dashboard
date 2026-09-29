@@ -1,9 +1,25 @@
 import type { AgentOpsRow, AgentOpsSnapshot } from "./live-types";
-import { LIVE_SCHEMA_VERSION } from "./live-types";
-import { STATUS_REDIS_KEY, STATUS_WRITE_LUA, parkedKey } from "./status-lua";
+import {
+  AGENT_ROW_FIELDS,
+  LIVE_SCHEMA_VERSION,
+  normaliseStoredRow,
+} from "./live-types";
+import { STATUS_WRITE_LUA, parkedKey, statusRedisKey } from "./status-lua";
 
-export { STATUS_REDIS_KEY };
-const REDIS_KEY = STATUS_REDIS_KEY;
+export { statusRedisKey };
+
+/** Known row fields for the Lua encoder (ARGV[13]). */
+export const LUA_ROW_FIELDS = AGENT_ROW_FIELDS.join(",");
+
+/** Every stored row → canonical legacy shape (missing known fields → null). */
+function normaliseAgents(agents: unknown): Record<string, AgentOpsRow> {
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) return {};
+  const out: Record<string, AgentOpsRow> = {};
+  for (const [id, row] of Object.entries(agents as Record<string, unknown>)) {
+    out[id] = normaliseStoredRow(row);
+  }
+  return out;
+}
 
 type MemoryBucket = {
   revision: number;
@@ -116,13 +132,13 @@ export async function getSnapshot(): Promise<AgentOpsSnapshot> {
   const storage = storageMode();
   if (storage === "redis") {
     try {
-      const raw = await redisCommand(["GET", REDIS_KEY]);
+      const raw = await redisCommand(["GET", statusRedisKey()]);
       if (typeof raw === "string" && raw) {
         const parsed = JSON.parse(raw) as Omit<AgentOpsSnapshot, "storage">;
         return {
           schemaVersion: parsed.schemaVersion ?? LIVE_SCHEMA_VERSION,
           updatedAt: parsed.updatedAt ?? new Date().toISOString(),
-          agents: parsed.agents ?? {},
+          agents: normaliseAgents(parsed.agents),
           storage: "redis",
         };
       }
@@ -141,7 +157,7 @@ export async function getSnapshot(): Promise<AgentOpsSnapshot> {
   return {
     schemaVersion: LIVE_SCHEMA_VERSION,
     updatedAt: mem.updatedAt,
-    agents: { ...mem.agents },
+    agents: normaliseAgents(mem.agents),
     storage: "memory",
   };
 }
@@ -164,7 +180,7 @@ export async function upsertAgentRow(row: AgentOpsRow): Promise<void> {
         "EVAL",
         STATUS_WRITE_LUA,
         2,
-        REDIS_KEY,
+        statusRedisKey(),
         parkedKey(row.agentId),
         row.agentId,
         "full",
@@ -180,6 +196,8 @@ export async function upsertAgentRow(row: AgentOpsRow): Promise<void> {
         "",
         "",
         0,
+        LUA_ROW_FIELDS,
+        "",
       ])) as string[];
       if (res?.[0] !== "ok") throw new Error(`status write failed: ${String(res?.[0])}`);
       return;
@@ -207,7 +225,7 @@ export async function replaceAgents(
 
   if (storage === "redis") {
     try {
-      await redisCommand(["SET", REDIS_KEY, JSON.stringify(next)]);
+      await redisCommand(["SET", statusRedisKey(), JSON.stringify(next)]);
       return { ...next, storage: "redis" };
     } catch (err) {
       console.error("[agent-ops] redis replace failed, using memory", err);
