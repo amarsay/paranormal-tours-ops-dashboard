@@ -5,16 +5,20 @@ import { useEffect, useMemo, useState } from "react";
 import { useOps } from "@/lib/store";
 import {
   derivePresence,
-  formatUpdatedAgo,
+  formatAgentUpdated,
   isLiveDot,
 } from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockersChip } from "./ParkedBlockers";
 
 /** Compact agent cards for Overview — relative time, presence, live dot. */
 export function OverviewAgents() {
-  const { agents, hydrated } = useOps();
+  const { agents, hydrated, freshness, offlineDim } = useOps();
   const [, setTick] = useState(0);
 
+  // Display-only tick so "Updated Xs ago" moves between polls. Presence and
+  // staleness are measured against the snapshot (freshness), not this tick.
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), 5000);
     return () => clearInterval(id);
@@ -31,13 +35,13 @@ export function OverviewAgents() {
       return 5;
     };
     return [...agents]
-      .map((a) => ({ agent: a, presence: derivePresence(a) }))
+      .map((a) => ({ agent: a, presence: derivePresence(a, freshness) }))
       .sort((a, b) => {
         const d = rank(a.presence) - rank(b.presence);
         if (d !== 0) return d;
         return a.agent.name.localeCompare(b.agent.name);
       });
-  }, [agents]);
+  }, [agents, freshness]);
 
   if (!hydrated) {
     return (
@@ -64,23 +68,28 @@ export function OverviewAgents() {
           <p className="text-xs text-ink-500">Waiting for first heartbeat</p>
         )}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-3 ${offlineDimClass(offlineDim.dimmed)}`}
+        data-offline-dimmed={offlineDim.dimmed || undefined}
+      >
         {sorted.map(({ agent, presence }) => {
-          const live = isLiveDot(agent);
+          const live = isLiveDot(agent, freshness);
           const attention =
             presence === "blocked" ||
             presence === "review" ||
             presence === "failed" ||
             presence === "stale";
           return (
-            <Link
+            // Card is a <div> so the parked-blockers chip (a button) isn't
+            // nested inside the link.
+            <div
               key={agent.id}
-              href={`/agents/${agent.id}`}
               id={`overview-agent-${agent.id}`}
-              className={`card group block p-4 transition hover:border-violet-400/30 ${
+              className={`card group p-4 transition hover:border-violet-400/30 ${
                 attention ? "border-rose-500/20" : ""
               }`}
             >
+              <Link href={`/agents/${agent.id}`} className="block">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -93,18 +102,20 @@ export function OverviewAgents() {
                 </div>
                 <AgentStatusChip status={presence} />
               </div>
-              <p className="mt-3 line-clamp-2 text-sm text-ink-300">
+              <p className="mt-3 line-clamp-2 text-sm text-ink-300 [overflow-wrap:anywhere]">
                 {agent.currentTask ?? "No current task"}
               </p>
               {agent.blockerReason && (
-                <p className="mt-1 line-clamp-1 text-xs text-rose-300/80">
+                <p className="mt-1 line-clamp-1 text-xs text-rose-300/80 [overflow-wrap:anywhere]">
                   {agent.blockerReason}
                 </p>
               )}
               <p className="mt-2 text-xs text-ink-500">
-                {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+                {formatAgentUpdated(agent, freshness)}
               </p>
-            </Link>
+              </Link>
+              <ParkedBlockersChip agent={agent} freshness={freshness} />
+            </div>
           );
         })}
       </div>

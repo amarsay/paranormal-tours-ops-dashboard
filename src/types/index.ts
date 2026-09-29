@@ -22,6 +22,19 @@ export type CodexStatus =
   | "published"
   | "rejected";
 
+/**
+ * A blocker the agent has parked so it can move on to other work. Lives
+ * alongside (not instead of) the live status/task.
+ */
+export interface ParkedBlocker {
+  /** Slug, ^[a-z0-9-]{1,64}$ — upsert key */
+  id: string;
+  title: string;
+  reason: string;
+  /** ISO 8601 UTC — when the blocker was first parked */
+  since: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -44,6 +57,8 @@ export interface Agent {
   taskState?: TaskStatus | null;
   /** Live sync overlay applied */
   live?: boolean;
+  /** Parked blockers from the live snapshot (absent → none) */
+  parkedBlockers?: ParkedBlocker[];
 }
 
 export interface Task {
@@ -98,12 +113,26 @@ export interface OpsState {
   liveSync: LiveSyncState;
 }
 
-export type LiveSyncMode = "live" | "polling" | "offline" | "idle";
+export type LiveSyncMode =
+  | "live"
+  | "polling"
+  | "reconnecting"
+  | "offline"
+  | "idle";
 
 export interface LiveSyncState {
   mode: LiveSyncMode;
+  /** ISO time of the last successful poll (client clock) */
   lastFetchAt: string | null;
   storage: "redis" | "memory" | null;
   error: string | null;
   schemaVersion: number | null;
+  /** Failed polls since the last success (offline after 3) */
+  consecutiveFailures: number;
+  /** Server clock (ms) of the last good snapshot — staleness reference */
+  snapshotAt: number | null;
+  /** Client Date.now() when the last good snapshot arrived */
+  receivedAt: number | null;
+  /** True while waiting on a first / visibility refetch: no stale marking */
+  suppressStale: boolean;
 }

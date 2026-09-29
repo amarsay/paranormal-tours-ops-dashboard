@@ -101,6 +101,135 @@ curl -sS -X POST http://localhost:3000/api/agent-ops/status \
   }'
 ```
 
+### Parked blockers
+
+Each agent card holds one live task, so an old blocker used to hide new work
+(e.g. Sid blocked on a Tailscale SSH job while actually working on a VPS
+backup). Agents can now **park** a blocker and keep heartbeating their real
+status/task. Parked blockers are independent of `status` / `taskTitle`:
+posting `status: "working"` never clears them.
+
+**GET** — every row carries `parkedBlockers` (oldest first; `[]` when none,
+including rows written before this feature):
+
+```json
+"sid": {
+  "agentId": "sid",
+  "status": "working",
+  "taskTitle": "VPS backup",
+  "…": "…",
+  "parkedBlockers": [
+    { "id": "tailscale-ssh", "title": "Tailscale SSH",
+      "reason": "Needs the ACL change approved", "since": "2026-09-27T05:00:00.000Z" }
+  ]
+}
+```
+
+**POST** (same endpoint + Bearer token as the heartbeat) — optional fields:
+
+| Field | Effect |
+|-------|--------|
+| `parkBlocker: { id, title, reason, since? }` | Upsert by `id`. Server sets `since` (ISO 8601 UTC) when absent; an update keeps the original `since` — even if a different explicit `since` is sent (waiting time never resets). The response's `blocker` then has `result: "updated"` and **`sinceKept: true`** (`false` otherwise). To restart the clock, clear and re-park. |
+| `clearBlocker: "<id>"` | Remove. Unknown id → no-op `200`. |
+| `parkedBlockers: […]` | **Ignored** — the server owns the list. |
+
+- Neither field → the list is untouched (existing reporters behave exactly as before).
+- Validation (all checked before anything is written):
+  - `id` `^[a-z0-9-]{1,64}$`.
+  - `title` 1–120 and `reason` 0–280 **Unicode code points** after trimming
+    leading/trailing whitespace (stored trimmed). `"👻".repeat(120)` passes; a
+    ZWJ emoji such as 👨‍👩‍👧 counts as its 5 code points.
+  - `since` strict ISO 8601 **UTC** — `YYYY-MM-DDTHH:MM[:SS[.fff…]]Z` — naming a
+    real calendar date/time (`2026-02-30`, `24:00`, `:60`, offsets such as
+    `+01:00` are rejected, not rolled over) and not more than **2 minutes** in the
+    future (clock skew).
+  - One blocker action per POST (both → `400`).
+- Errors carry `{ error, code }`:
+
+  | HTTP | `code` | When |
+  |------|--------|------|
+  | 400 | `invalid_blocker` | bad id / title / reason / shape, or both actions |
+  | 400 | `invalid_since` | `since` not strict ISO 8601 UTC or not a real date |
+  | 400 | `since_in_future` | `since` > server time + 2 min |
+  | 409 | `blocker_limit` | 11th blocker for the agent |
+  | 409 | `no_live_row` | park for an agent that has never heartbeated, with no heartbeat fields in the POST (would be invisible) |
+  | 503 | `store_unavailable` | Redis error |
+
+  On any error the **whole** POST is rejected, heartbeat fields included.
+- Every error response on `POST /api/agent-ops/status` carries `{ error, code }`
+  (heartbeats too):
+
+  | HTTP | `code` | When |
+  |------|--------|------|
+  | 400 | `empty_body` | no body / whitespace only |
+  | 400 | `invalid_json` | body isn't valid JSON |
+  | 400 | `invalid_body` | valid JSON but not an object (`null`, array, number, string, boolean) |
+  | 401 | `unauthorized` | missing / wrong Bearer token |
+  | 404 | `unknown_agent` | identity doesn't resolve to a roster agent |
+  | 503 | `write_token_not_configured` | server has no `OPS_WRITE_TOKEN` |
+
+  Nothing is applied on any of these.
+- **Partial update:** a POST that carries a blocker action merges only the
+  heartbeat fields it actually sends onto the stored row. Any heartbeat field
+  counts as a sign of life, so `heartbeatAt`/`updatedAt` are always set too:
+  from `heartbeatAt` / `updatedAt` / `at` if sent, otherwise **server time**
+  (ISO with milliseconds, e.g. `2026-09-29T08:42:45.688Z`) — intended. A blocker-only POST
+  (`agentId` + `parkBlocker`/`clearBlocker`) leaves the row untouched. If the
+  agent has no row yet and the POST has heartbeat fields, a row is created
+  from them.
+- **Plain heartbeats** (no blocker action) keep the long-standing **full-row**
+  semantics: omitted fields reset to defaults (`idle` / `null`). Kept on
+  purpose so a reporter that drops `blockerReason` / `taskTitle` still clears
+  them, and existing reporters behave identically.
+- `clearBlocker` works even for an agent with no row (cleans up stray hashes).
+- Response: `{ ok, row, parkedBlockers, blocker: { op, … }, snapshot }`; a
+  plain heartbeat's `row` also includes `parkedBlockers`.
+
+```bash
+# park (upsert)
+curl -sS -X POST https://<deployment>/api/agent-ops/status \
+  -H "Authorization: Bearer <OPS_WRITE_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "sid",
+    "status": "working",
+    "taskTitle": "VPS backup",
+    "taskState": "in_progress",
+    "parkBlocker": {
+      "id": "tailscale-ssh",
+      "title": "Tailscale SSH",
+      "reason": "Needs the ACL change approved before SSH can be enabled"
+    }
+  }'
+
+# clear
+curl -sS -X POST https://<deployment>/api/agent-ops/status \
+  -H "Authorization: Bearer <OPS_WRITE_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{ "agentId": "sid", "clearBlocker": "tailscale-ssh" }'
+```
+
+**Storage / concurrency.** The data layout is unchanged from production:
+rows stay in the JSON string `pt:agent-ops:status:v1`; parked blockers live in
+a per-agent Redis hash `pt:agent-ops:parked:v1:<agentId>` keyed by blocker id.
+Every write — plain heartbeat or blocker POST — is **one Lua `EVAL`**
+(`src/lib/status-lua.ts`), which Redis runs atomically: it decodes the JSON,
+updates only that agent's row (replace or merge), applies the park/clear
+(keeping an existing `since`, enforcing the cap, checking the row exists) and
+re-encodes. There's no GET-then-SET window any more, so concurrent heartbeats
+for different agents can't drop each other's rows (previously the last `SET`
+won), and a blocker action and its heartbeat fields commit together or not at
+all. No migration: old code can still read (and write) the key, so rollback
+is safe. GET pipelines one `HGETALL` per row. In memory mode every op is
+synchronous in one process.
+
+**UI.** Cards show an amber “N parked blocker(s)” chip that discloses the list
+(title, reason, “waiting 2d 3h”); **Needs you** has a separate *Parked
+blockers* section (all agents, oldest first); the agent page lists them.
+Waiting time is measured against the live-sync snapshot clock, like
+staleness. The mock stream (in-memory store only) adds example data: Sid
+working on “VPS backup” with “Tailscale SSH” parked, and Polly with two.
+
 Agent cadence (Spectre): immediate on change; every **15s** while working/blocked/review; every **60s** while idle.
 
 Dashboard polls GET every **5s**. Live JSON **wins** over localStorage for status / task title / heartbeat fields.
@@ -111,6 +240,27 @@ Dashboard polls GET every **5s**. Live JSON **wins** over localStorage for statu
 - Stale: miss >90s (active) / >5m (idle)
 - `done` pulses ~60s then idle; `failed` stays until new task
 - `offline`: never checked in via live
+- Ages are measured against the **snapshot** (server `Date` header of the poll
+  response, falling back to fetch-completed time), not the browser's render
+  clock — so a throttled background tab can't push agents past 90s/5m between
+  polls. “Updated Xs ago” may tick forward up to 10s between polls (display only).
+
+### Live sync indicator (header)
+
+- One failed poll keeps the last good snapshot and shows **Reconnecting…**;
+  the board shows **Offline** only after **3 consecutive** failed polls (a poll
+  that hangs >8s counts as failed). Any success resets the counter.
+- Returning to the tab (`visibilitychange` → visible) refetches immediately;
+  stale/offline marking is suppressed until that refetch resolves.
+- “Last synced Ns ago” shows how long since the last successful poll.
+- After ~2 min truly offline (3+ failed polls; measured from the last
+  successful sync, `OFFLINE_DIM_AFTER_MS` in `src/lib/live-sync.ts`) agent
+  cards dim (visual only — chips/statuses unchanged) and a banner shows
+  “Showing data from HH:MM (UK)”. While offline, card times read
+  “Updated at HH:MM” instead of “Xs ago”. Cleared on the next successful poll.
+- Phones: a compact coloured status pill sits in the header, plus a thin
+  Reconnecting/Offline banner with “Last synced …”; the nav wraps to its own
+  row so all tabs fit at 360px.
 
 ## Mock stream (no Spectre / Upstash)
 
@@ -129,6 +279,19 @@ curl -sS -X POST http://localhost:3000/api/agent-ops/mock \
   -H "Content-Type: application/json" \
   -d '{"reset":true}'
 ```
+
+**Write policy** (`src/lib/mock-policy.ts`) — the mock never writes to a real
+store in production:
+
+| Environment | Mock GET | Mock POST (token) |
+|-------------|----------|-------------------|
+| `VERCEL_ENV=production` | read-only snapshot (`readOnly: true`) | `403 mock_disabled` |
+| `NODE_ENV=production` outside Vercel (`next start`) without `PT_MOCK_WRITES=1` | read-only | `403 mock_disabled` |
+| Preview / dev with a shared store (Upstash) | writes only with `Authorization: Bearer OPS_WRITE_TOKEN`, else read-only | tick / reset |
+| In-memory store (`next dev`, or `next start` with `PT_MOCK_WRITES=1`) | ticks as before (no auth) | tick / reset |
+
+Note Vercel previews currently share the production KV, so a token-authorised
+mock write on a preview still lands in production data.
 
 Open the Overview — KPIs, **Needs you** attention strip, and agent cards should update within ~5s.
 

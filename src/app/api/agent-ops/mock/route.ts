@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 import { applyHeartbeat } from "@/lib/apply-heartbeat";
-import { getSnapshot, replaceAgents } from "@/lib/live-store";
+import { getSnapshotWithBlockers } from "@/lib/agent-ops-status";
+import { replaceAgents, storageMode } from "@/lib/live-store";
+import { writeStatus } from "@/lib/status-write";
 import { listRosterAgents } from "@/lib/roster-resolve";
 import { requireWriteToken } from "@/lib/ops-auth";
+import { assertWriteToken } from "@/lib/live-store";
+import { mockWritePolicy } from "@/lib/mock-policy";
 import type { AgentOpsRow } from "@/lib/live-types";
 
 export const dynamic = "force-dynamic";
@@ -93,9 +97,65 @@ const MOCK_SCRIPT: Array<{
   },
 ];
 
+/**
+ * EXAMPLE DATA (mock mode only) — agents that keep working while blockers are
+ * parked. Heartbeated on every tick so they stay live; blockers are upserted
+ * each tick (upsert keeps the original `since`, so waiting times grow).
+ * `ageMs` backdates `since` when first created so the demo reads "waiting 2d 3h".
+ *
+ * Only seeded with the in-memory store: on Vercel the mock shares the real
+ * Upstash store, and parked blockers don't age out like mock heartbeats do,
+ * so example blockers would linger in the real "Needs you" strip.
+ */
+const MOCK_PARKED: Array<{
+  agentId: string;
+  taskTitle: string;
+  blockers: Array<{ id: string; title: string; reason: string; ageMs: number }>;
+}> = [
+  {
+    agentId: "sid",
+    taskTitle: "VPS backup",
+    blockers: [
+      {
+        id: "tailscale-ssh",
+        title: "Tailscale SSH",
+        reason:
+          "Example data — needs founder to approve the Tailscale ACL change before SSH can be enabled.",
+        ageMs: (2 * 24 + 3) * 3_600_000,
+      },
+    ],
+  },
+  {
+    agentId: "polly",
+    taskTitle: "Draft refund policy v2",
+    blockers: [
+      {
+        id: "venue-insurance",
+        title: "Venue insurance certificate",
+        reason: "Example data — waiting on the venue to send its public liability certificate.",
+        ageMs: 26 * 3_600_000,
+      },
+      {
+        id: "pendle-landowner-consent",
+        title: "Pendle Hill landowner consent",
+        reason: "Example data — landowner hasn't replied to the night-access request.",
+        ageMs: 5 * 3_600_000 + 20 * 60_000,
+      },
+    ],
+  },
+];
+
 declare global {
   // eslint-disable-next-line no-var
   var __ptMockTick: number | undefined;
+}
+
+async function readOnly(reason: string) {
+  const snap = await getSnapshotWithBlockers();
+  return NextResponse.json(
+    { ok: true, mock: true, readOnly: true, reason, ...snap },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 function nextTick(): number {
@@ -123,13 +183,53 @@ async function runMockTick() {
     heartbeatAt: now,
     updatedAt: now,
   });
-  return getSnapshot();
+  const nowMs = Date.parse(now);
+  const parkedExamples = storageMode() === "memory" ? MOCK_PARKED : [];
+  for (const m of parkedExamples) {
+    if (!known.has(m.agentId)) continue;
+    await applyHeartbeat({
+      agentId: m.agentId,
+      presence: "working",
+      status: "working",
+      taskTitle: m.taskTitle,
+      taskState: "in_progress",
+      heartbeatAt: now,
+      updatedAt: now,
+    });
+    for (const b of m.blockers) {
+      await writeStatus({
+        agentId: m.agentId,
+        blocker: {
+          type: "park",
+          blocker: {
+            id: b.id,
+            title: b.title,
+            reason: b.reason,
+            since: new Date(nowMs - b.ageMs).toISOString(),
+          },
+        },
+      });
+    }
+  }
+  return getSnapshotWithBlockers();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const policy = mockWritePolicy();
+  if (policy === "disabled") {
+    return readOnly("Mock writes are disabled in production.");
+  }
+  if (
+    policy === "token" &&
+    !assertWriteToken(req.headers.get("authorization"))
+  ) {
+    return readOnly(
+      "Mock writes to a shared store need Authorization: Bearer OPS_WRITE_TOKEN."
+    );
+  }
   const snap = await runMockTick();
   if ("error" in snap && snap.error) {
-    return NextResponse.json(snap, { status: 500 });
+    return NextResponse.json({ ...snap, code: "mock_error" }, { status: 500 });
   }
   return NextResponse.json(
     { ok: true, mock: true, tick: (globalThis.__ptMockTick ?? 1) - 1, ...snap },
@@ -140,6 +240,12 @@ export async function GET() {
 export async function POST(req: Request) {
   const denied = requireWriteToken(req);
   if (denied) return denied;
+  if (mockWritePolicy() === "disabled") {
+    return NextResponse.json(
+      { error: "Mock writes are disabled in production.", code: "mock_disabled" },
+      { status: 403 }
+    );
+  }
 
   let body: { reset?: boolean } = {};
   try {
@@ -150,8 +256,17 @@ export async function POST(req: Request) {
 
   if (body.reset) {
     await replaceAgents({} as Record<string, AgentOpsRow>);
+    // Only the example blockers — never real ones.
+    for (const m of MOCK_PARKED) {
+      for (const b of m.blockers) {
+        await writeStatus({
+          agentId: m.agentId,
+          blocker: { type: "clear", id: b.id },
+        });
+      }
+    }
     globalThis.__ptMockTick = 0;
-    const snap = await getSnapshot();
+    const snap = await getSnapshotWithBlockers();
     return NextResponse.json({ ok: true, reset: true, ...snap });
   }
 

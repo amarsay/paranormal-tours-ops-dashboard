@@ -6,13 +6,19 @@ import { useSearchParams } from "next/navigation";
 import { useOps } from "@/lib/store";
 import { SQUADS } from "@/lib/seed";
 import type { PresenceStatus } from "@/types";
-import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
+import {
+  derivePresence,
+  formatAgentUpdated,
+  isLiveDot,
+} from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockersChip } from "./ParkedBlockers";
 
 const STATUSES: PresenceStatus[] = ["idle", "working", "blocked", "review", "done", "failed", "stale", "offline"];
 
 export function AgentsGrid() {
-  const { agents, hydrated } = useOps();
+  const { agents, hydrated, freshness, offlineDim } = useOps();
   const params = useSearchParams();
   const initialSquad = params.get("squad") ?? "all";
   const [query, setQuery] = useState("");
@@ -23,7 +29,7 @@ export function AgentsGrid() {
     const q = query.trim().toLowerCase();
     return agents.filter((a) => {
       if (squad !== "all" && a.squad !== squad) return false;
-      if (status !== "all" && derivePresence(a) !== status) return false;
+      if (status !== "all" && derivePresence(a, freshness) !== status) return false;
       if (!q) return true;
       return (
         a.name.toLowerCase().includes(q) ||
@@ -32,7 +38,7 @@ export function AgentsGrid() {
         (a.currentTask ?? "").toLowerCase().includes(q)
       );
     });
-  }, [agents, query, squad, status]);
+  }, [agents, query, squad, status, freshness]);
 
   if (!hydrated) {
     return <div className="card p-6 text-sm text-ink-400">Loading agents…</div>;
@@ -77,35 +83,40 @@ export function AgentsGrid() {
         Showing {filtered.length} of {agents.length} agents
       </p>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-3 ${offlineDimClass(offlineDim.dimmed)}`}
+        data-offline-dimmed={offlineDim.dimmed || undefined}
+      >
         {filtered.map((agent) => (
-          <Link
+          <div
             key={agent.id}
-            href={`/agents/${agent.id}`}
-            className="card group block p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
+            className="card group min-w-0 p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
           >
+            <Link href={`/agents/${agent.id}`} className="block">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="font-semibold text-ink-50 group-hover:text-violet-100">
                     {agent.name}
                   </h3>
-                  <LiveDot live={isLiveDot(agent)} />
+                  <LiveDot live={isLiveDot(agent, freshness)} />
                 </div>
                 <p className="text-xs text-ink-400">{agent.role}</p>
               </div>
-              <AgentStatusChip status={derivePresence(agent)} />
+              <AgentStatusChip status={derivePresence(agent, freshness)} />
             </div>
             <p className="mt-3 text-xs uppercase tracking-wider text-ink-500">
               {agent.squad}
             </p>
-            <p className="mt-1 line-clamp-2 text-sm text-ink-300">
+            <p className="mt-1 line-clamp-2 text-sm text-ink-300 [overflow-wrap:anywhere]">
               {agent.currentTask ?? "No current task"}
             </p>
             <p className="mt-2 text-xs text-ink-500">
-              {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+              {formatAgentUpdated(agent, freshness)}
             </p>
-          </Link>
+            </Link>
+            <ParkedBlockersChip agent={agent} freshness={freshness} />
+          </div>
         ))}
       </div>
     </div>

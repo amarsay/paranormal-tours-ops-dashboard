@@ -1,4 +1,9 @@
-import type { AgentStatus, PresenceStatus, TaskStatus } from "@/types";
+import type {
+  AgentStatus,
+  ParkedBlocker,
+  PresenceStatus,
+  TaskStatus,
+} from "@/types";
 
 export const LIVE_SCHEMA_VERSION = 1;
 
@@ -19,6 +24,11 @@ export interface AgentOpsRow {
   taskId?: string | null;
   presence?: PresenceStatus | string | null;
   message?: string | null;
+  /**
+   * Parked blockers (GET only). Stored separately from the row (per-agent
+   * Redis hash) and merged in on read; legacy rows read as [].
+   */
+  parkedBlockers?: ParkedBlocker[];
 }
 
 export interface AgentOpsSnapshot {
@@ -49,6 +59,12 @@ export interface AgentOpsHeartbeatBody {
   taskId?: string | null;
   message?: string | null;
   at?: string;
+  /** Upsert a parked blocker by id (see src/lib/parked-blockers.ts). */
+  parkBlocker?: unknown;
+  /** Remove a parked blocker by id (unknown id → no-op 200). */
+  clearBlocker?: unknown;
+  /** Ignored if sent — the server owns the list. */
+  parkedBlockers?: unknown;
 }
 
 export const PRIMARY_STATUSES: AgentStatus[] = [

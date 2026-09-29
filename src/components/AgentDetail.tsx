@@ -3,9 +3,15 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { formatRelative, useOps } from "@/lib/store";
-import { derivePresence, formatUpdatedAgo, isLiveDot } from "@/lib/freshness";
+import {
+  derivePresence,
+  formatAgentUpdated,
+  isLiveDot,
+} from "@/lib/freshness";
 import type { AgentStatus } from "@/types";
 import { AgentStatusChip, LiveDot, TaskStatusChip } from "./StatusChip";
+import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockerList, parkedLabel } from "./ParkedBlockers";
 
 export function AgentDetail({ slug }: { slug: string }) {
   const {
@@ -13,6 +19,8 @@ export function AgentDetail({ slug }: { slug: string }) {
     tasks,
     activity,
     hydrated,
+    freshness,
+    offlineDim,
     assignTask,
     setAgentStatus,
     addAgentNote,
@@ -38,6 +46,7 @@ export function AgentDetail({ slug }: { slug: string }) {
     );
   }
 
+  const parked = agent.parkedBlockers ?? [];
   const agentTasks = tasks.filter((t) => t.agentId === agent.id);
   const agentActivity = activity.filter((a) => a.agentName === agent.name);
 
@@ -72,22 +81,24 @@ export function AgentDetail({ slug }: { slug: string }) {
             {agent.squad}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div
+          className={`flex flex-col items-end gap-2 ${offlineDimClass(offlineDim.dimmed)}`}
+        >
           <div className="flex items-center gap-2">
-            <LiveDot live={isLiveDot(agent)} />
-            <AgentStatusChip status={derivePresence(agent)} />
+            <LiveDot live={isLiveDot(agent, freshness)} />
+            <AgentStatusChip status={derivePresence(agent, freshness)} />
           </div>
           <p className="text-xs text-ink-500">
-            {formatUpdatedAgo(agent.heartbeatAt || agent.lastUpdate)}
+            {formatAgentUpdated(agent, freshness)}
           </p>
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
+        <div className="min-w-0 space-y-4 lg:col-span-2">
           <div className="card p-4">
             <h2 className="text-sm font-semibold text-ink-100">Current task</h2>
-            <p className="mt-2 text-ink-200">
+            <p className="mt-2 text-ink-200 [overflow-wrap:anywhere]">
               {agent.currentTask ?? "Idle — assign work below."}
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
@@ -109,6 +120,27 @@ export function AgentDetail({ slug }: { slug: string }) {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div
+            className={`card min-w-0 p-4 ${offlineDimClass(offlineDim.dimmed)}`}
+            id="parked-blockers"
+          >
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold text-ink-100">
+                Parked blockers
+              </h2>
+              {parked.length > 0 && (
+                <span className="text-xs text-amber-200/80">
+                  {parkedLabel(parked.length)}
+                </span>
+              )}
+            </div>
+            {parked.length === 0 ? (
+              <p className="text-sm text-ink-500">No parked blockers.</p>
+            ) : (
+              <ParkedBlockerList blockers={parked} freshness={freshness} />
+            )}
           </div>
 
           <div className="card p-4">
@@ -169,7 +201,7 @@ export function AgentDetail({ slug }: { slug: string }) {
           </div>
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="card p-4">
             <h2 className="mb-3 text-sm font-semibold text-ink-100">
               Task history
