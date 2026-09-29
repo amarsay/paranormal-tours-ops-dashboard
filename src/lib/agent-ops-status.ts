@@ -82,7 +82,13 @@ export async function handleStatusPost(
     // not read by applyHeartbeat).
     const result = await applyHeartbeat(body);
     if (!result.ok) {
-      return { status: result.status, body: { error: result.error } };
+      return {
+        status: result.status,
+        body: {
+          error: result.error,
+          code: result.status === 404 ? "unknown_agent" : "invalid_body",
+        },
+      };
     }
     const snapshot = await getSnapshotWithBlockers();
     const parkedBlockers =
@@ -95,7 +101,9 @@ export async function handleStatusPost(
   }
 
   const resolved = resolveHeartbeatAgent(body);
-  if (!resolved) return { status: 404, body: { error: "Unknown agent" } };
+  if (!resolved) {
+    return { status: 404, body: { error: "Unknown agent", code: "unknown_agent" } };
+  }
 
   const now = new Date().toISOString();
   const heartbeat = hasHeartbeatFields(body);
@@ -134,6 +142,20 @@ export async function handleStatusPost(
     return { status: 409, body: { error, code: result.code } };
   }
 
+  // Re-park with a different explicit `since`: the original is kept on
+  // purpose (waiting time must not reset) — say so.
+  let blocker: Record<string, unknown> | undefined = result.blocker;
+  if (result.blocker?.op === "park" && op.type === "park") {
+    const sent = op.blocker.since;
+    blocker = {
+      ...result.blocker,
+      sinceKept:
+        result.blocker.result === "updated" &&
+        sent !== undefined &&
+        sent !== result.blocker.blocker.since,
+    };
+  }
+
   const snapshot = await getSnapshotWithBlockers();
   const parkedBlockers =
     snapshot.agents[resolved.id]?.parkedBlockers ??
@@ -144,7 +166,7 @@ export async function handleStatusPost(
       ok: true,
       row: result.row ? { ...result.row, parkedBlockers } : null,
       parkedBlockers,
-      blocker: result.blocker,
+      blocker,
       snapshot,
     },
   };

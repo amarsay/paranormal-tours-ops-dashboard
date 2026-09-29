@@ -5,6 +5,8 @@ import { replaceAgents, storageMode } from "@/lib/live-store";
 import { writeStatus } from "@/lib/status-write";
 import { listRosterAgents } from "@/lib/roster-resolve";
 import { requireWriteToken } from "@/lib/ops-auth";
+import { assertWriteToken } from "@/lib/live-store";
+import { mockWritePolicy } from "@/lib/mock-policy";
 import type { AgentOpsRow } from "@/lib/live-types";
 
 export const dynamic = "force-dynamic";
@@ -148,6 +150,14 @@ declare global {
   var __ptMockTick: number | undefined;
 }
 
+async function readOnly(reason: string) {
+  const snap = await getSnapshotWithBlockers();
+  return NextResponse.json(
+    { ok: true, mock: true, readOnly: true, reason, ...snap },
+    { headers: { "Cache-Control": "no-store" } }
+  );
+}
+
 function nextTick(): number {
   const t = (globalThis.__ptMockTick ?? 0) % MOCK_SCRIPT.length;
   globalThis.__ptMockTick = t + 1;
@@ -204,10 +214,22 @@ async function runMockTick() {
   return getSnapshotWithBlockers();
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const policy = mockWritePolicy();
+  if (policy === "disabled") {
+    return readOnly("Mock writes are disabled in production.");
+  }
+  if (
+    policy === "token" &&
+    !assertWriteToken(req.headers.get("authorization"))
+  ) {
+    return readOnly(
+      "Mock writes to a shared store need Authorization: Bearer OPS_WRITE_TOKEN."
+    );
+  }
   const snap = await runMockTick();
   if ("error" in snap && snap.error) {
-    return NextResponse.json(snap, { status: 500 });
+    return NextResponse.json({ ...snap, code: "mock_error" }, { status: 500 });
   }
   return NextResponse.json(
     { ok: true, mock: true, tick: (globalThis.__ptMockTick ?? 1) - 1, ...snap },
@@ -218,6 +240,12 @@ export async function GET() {
 export async function POST(req: Request) {
   const denied = requireWriteToken(req);
   if (denied) return denied;
+  if (mockWritePolicy() === "disabled") {
+    return NextResponse.json(
+      { error: "Mock writes are disabled in production.", code: "mock_disabled" },
+      { status: 403 }
+    );
+  }
 
   let body: { reset?: boolean } = {};
   try {

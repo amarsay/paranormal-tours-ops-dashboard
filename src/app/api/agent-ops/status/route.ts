@@ -4,7 +4,7 @@ import {
   handleStatusPost,
 } from "@/lib/agent-ops-status";
 import type { AgentOpsHeartbeatBody } from "@/lib/live-types";
-import { requireWriteToken } from "@/lib/ops-auth";
+import { readJsonObjectBody, requireWriteToken } from "@/lib/ops-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,13 +29,10 @@ export async function POST(req: Request) {
   const denied = requireWriteToken(req);
   if (denied) return denied;
 
-  let body: AgentOpsHeartbeatBody;
-  try {
-    body = (await req.json()) as AgentOpsHeartbeatBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
+  // empty_body / invalid_json / invalid_body (null, array, number, string)
+  const parsed = await readJsonObjectBody(req);
+  if (!parsed.ok) return parsed.response;
 
-  const result = await handleStatusPost(body);
+  const result = await handleStatusPost(parsed.body as AgentOpsHeartbeatBody);
   return NextResponse.json(result.body, { status: result.status });
 }

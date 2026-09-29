@@ -129,7 +129,7 @@ including rows written before this feature):
 
 | Field | Effect |
 |-------|--------|
-| `parkBlocker: { id, title, reason, since? }` | Upsert by `id`. Server sets `since` (ISO 8601 UTC) when absent; an update keeps the original `since`. |
+| `parkBlocker: { id, title, reason, since? }` | Upsert by `id`. Server sets `since` (ISO 8601 UTC) when absent; an update keeps the original `since` — even if a different explicit `since` is sent (waiting time never resets). The response's `blocker` then has `result: "updated"` and **`sinceKept: true`** (`false` otherwise). To restart the clock, clear and re-park. |
 | `clearBlocker: "<id>"` | Remove. Unknown id → no-op `200`. |
 | `parkedBlockers: […]` | **Ignored** — the server owns the list. |
 
@@ -156,10 +156,24 @@ including rows written before this feature):
   | 503 | `store_unavailable` | Redis error |
 
   On any error the **whole** POST is rejected, heartbeat fields included.
-  Unknown agent → `404`.
+- Every error response on `POST /api/agent-ops/status` carries `{ error, code }`
+  (heartbeats too):
+
+  | HTTP | `code` | When |
+  |------|--------|------|
+  | 400 | `empty_body` | no body / whitespace only |
+  | 400 | `invalid_json` | body isn't valid JSON |
+  | 400 | `invalid_body` | valid JSON but not an object (`null`, array, number, string, boolean) |
+  | 401 | `unauthorized` | missing / wrong Bearer token |
+  | 404 | `unknown_agent` | identity doesn't resolve to a roster agent |
+  | 503 | `write_token_not_configured` | server has no `OPS_WRITE_TOKEN` |
+
+  Nothing is applied on any of these.
 - **Partial update:** a POST that carries a blocker action merges only the
-  heartbeat fields it actually sends onto the stored row (plus
-  `heartbeatAt`/`updatedAt`, defaulting to server time). A blocker-only POST
+  heartbeat fields it actually sends onto the stored row. Any heartbeat field
+  counts as a sign of life, so `heartbeatAt`/`updatedAt` are always set too:
+  from `heartbeatAt` / `updatedAt` / `at` if sent, otherwise **server time**
+  (ISO with milliseconds, e.g. `2026-09-29T08:42:45.688Z`) — intended. A blocker-only POST
   (`agentId` + `parkBlocker`/`clearBlocker`) leaves the row untouched. If the
   agent has no row yet and the POST has heartbeat fields, a row is created
   from them.
@@ -265,6 +279,19 @@ curl -sS -X POST http://localhost:3000/api/agent-ops/mock \
   -H "Content-Type: application/json" \
   -d '{"reset":true}'
 ```
+
+**Write policy** (`src/lib/mock-policy.ts`) — the mock never writes to a real
+store in production:
+
+| Environment | Mock GET | Mock POST (token) |
+|-------------|----------|-------------------|
+| `VERCEL_ENV=production` | read-only snapshot (`readOnly: true`) | `403 mock_disabled` |
+| `NODE_ENV=production` outside Vercel (`next start`) without `PT_MOCK_WRITES=1` | read-only | `403 mock_disabled` |
+| Preview / dev with a shared store (Upstash) | writes only with `Authorization: Bearer OPS_WRITE_TOKEN`, else read-only | tick / reset |
+| In-memory store (`next dev`, or `next start` with `PT_MOCK_WRITES=1`) | ticks as before (no auth) | tick / reset |
+
+Note Vercel previews currently share the production KV, so a token-authorised
+mock write on a preview still lands in production data.
 
 Open the Overview — KPIs, **Needs you** attention strip, and agent cards should update within ~5s.
 
