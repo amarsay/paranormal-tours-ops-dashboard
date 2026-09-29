@@ -22,6 +22,19 @@ export type CodexStatus =
   | "published"
   | "rejected";
 
+/**
+ * A blocker the agent has parked so it can move on to other work. Lives
+ * alongside (not instead of) the live status/task.
+ */
+export interface ParkedBlocker {
+  /** Slug, ^[a-z0-9-]{1,64}$ — upsert key */
+  id: string;
+  title: string;
+  reason: string;
+  /** ISO 8601 UTC — when the blocker was first parked */
+  since: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -44,6 +57,8 @@ export interface Agent {
   taskState?: TaskStatus | null;
   /** Live sync overlay applied */
   live?: boolean;
+  /** Parked blockers from the live snapshot (absent → none) */
+  parkedBlockers?: ParkedBlocker[];
 }
 
 export interface Task {

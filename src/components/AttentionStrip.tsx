@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { useOps } from "@/lib/store";
-import { derivePresence } from "@/lib/freshness";
+import {
+  derivePresence,
+  formatLondonClock,
+  formatParkedWaiting,
+} from "@/lib/freshness";
+import { sortBlockers } from "@/lib/parked-blockers";
 import { AgentStatusChip } from "./StatusChip";
 import { offlineDimClass } from "./offline-dim";
 
@@ -27,9 +32,25 @@ export function AttentionStrip() {
       });
   }, [agents, freshness]);
 
+  // Every parked blocker across agents, oldest first — separate from the live
+  // blocked/review cards above (an agent can be working and still have some).
+  const parked = useMemo(() => {
+    const all = agents.flatMap((agent) =>
+      (agent.parkedBlockers ?? []).map((blocker) => ({ agent, blocker }))
+    );
+    const order = new Map(
+      sortBlockers(all.map((x) => x.blocker)).map((b, i) => [b, i])
+    );
+    return all.sort(
+      (a, b) =>
+        (order.get(a.blocker) ?? 0) - (order.get(b.blocker) ?? 0) ||
+        a.agent.name.localeCompare(b.agent.name)
+    );
+  }, [agents]);
+
   if (!hydrated) return null;
 
-  if (needsYou.length === 0) {
+  if (needsYou.length === 0 && parked.length === 0) {
     return (
       <div className="card border-white/5 px-4 py-3">
         <p className="text-sm text-ink-400">
@@ -40,13 +61,19 @@ export function AttentionStrip() {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" id="needs-you">
       <div className="flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-rose-300/90">
           Needs you
         </h2>
-        <p className="text-xs text-ink-500">{needsYou.length} item(s)</p>
+        <p className="text-xs text-ink-500">
+          {needsYou.length} item(s)
+          {parked.length > 0 && ` · ${parked.length} parked`}
+        </p>
       </div>
+      {needsYou.length === 0 && (
+        <p className="text-sm text-ink-400">No live blocked or review cards.</p>
+      )}
       <ul className={`space-y-2 ${offlineDimClass(offlineDim.dimmed)}`}>
         {needsYou.map(({ agent, presence }) => {
           const isReview = presence === "review";
@@ -90,6 +117,57 @@ export function AttentionStrip() {
           );
         })}
       </ul>
+      {parked.length > 0 && (
+        <section
+          aria-labelledby="parked-blockers-heading"
+          className={`space-y-2 pt-1 ${offlineDimClass(offlineDim.dimmed)}`}
+          id="parked-blockers"
+        >
+          <div className="flex items-baseline justify-between gap-2">
+            <h3
+              id="parked-blockers-heading"
+              className="text-xs font-semibold uppercase tracking-wider text-amber-300/90"
+            >
+              Parked blockers
+            </h3>
+            <p className="text-xs text-ink-500">oldest first</p>
+          </div>
+          <ul className="space-y-2">
+            {parked.map(({ agent, blocker }) => (
+              <li
+                key={`${agent.id}:${blocker.id}`}
+                className="card flex flex-wrap items-start justify-between gap-x-3 gap-y-1 border-amber-500/20 bg-amber-950/10 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <Link
+                      href={`/agents/${agent.id}#parked-blockers`}
+                      className="font-medium text-ink-50 hover:text-violet-200"
+                    >
+                      {agent.name}
+                    </Link>
+                    <span className="break-words text-sm text-amber-100">
+                      {blocker.title}
+                    </span>
+                  </div>
+                  {blocker.reason && (
+                    <p className="mt-1 break-words text-xs text-ink-300">
+                      {blocker.reason}
+                    </p>
+                  )}
+                </div>
+                <time
+                  dateTime={blocker.since}
+                  title={`Parked ${formatLondonClock(Date.parse(blocker.since))} (UK)`}
+                  className="shrink-0 text-xs text-amber-200/80"
+                >
+                  {formatParkedWaiting(blocker.since, freshness)}
+                </time>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

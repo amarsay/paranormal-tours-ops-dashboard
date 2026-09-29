@@ -202,6 +202,10 @@ export function OpsProvider({
             handoffTo: row.handoffTo ?? null,
             taskId: row.taskId ?? null,
             taskState: taskState,
+            // Independent of status/task; legacy rows (no field) → none.
+            parkedBlockers: Array.isArray(row.parkedBlockers)
+              ? row.parkedBlockers
+              : [],
             notes:
               row.notes && !a.notes.includes(row.notes)
                 ? [row.notes, ...a.notes].slice(0, 40)

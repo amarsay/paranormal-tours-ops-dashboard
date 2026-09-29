@@ -49,7 +49,8 @@ function redisConfigured(): boolean {
   return Boolean(redisUrl() && redisToken());
 }
 
-async function redisCommand(args: unknown[]): Promise<unknown> {
+/** Single Upstash REST command. Throws on HTTP or Redis error. */
+export async function redisCommand(args: unknown[]): Promise<unknown> {
   const url = redisUrl()!;
   const token = redisToken()!;
   const res = await fetch(url, {
@@ -67,6 +68,34 @@ async function redisCommand(args: unknown[]): Promise<unknown> {
   }
   const json = (await res.json()) as { result?: unknown };
   return json.result;
+}
+
+/**
+ * Upstash REST pipeline (one HTTP round trip, commands run in order; not a
+ * transaction). Returns each command's result; throws if any errored.
+ */
+export async function redisPipeline(commands: unknown[][]): Promise<unknown[]> {
+  if (commands.length === 0) return [];
+  const url = redisUrl()!;
+  const token = redisToken()!;
+  const res = await fetch(`${url.replace(/\/$/, "")}/pipeline`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(commands),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Upstash pipeline error ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as Array<{ result?: unknown; error?: string }>;
+  return json.map((item) => {
+    if (item.error) throw new Error(`Upstash pipeline command error: ${item.error}`);
+    return item.result;
+  });
 }
 
 export function storageMode(): "redis" | "memory" {

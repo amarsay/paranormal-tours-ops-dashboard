@@ -11,6 +11,7 @@ import {
 import type { AgentStatus } from "@/types";
 import { AgentStatusChip, LiveDot, TaskStatusChip } from "./StatusChip";
 import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockerList, parkedLabel } from "./ParkedBlockers";
 
 export function AgentDetail({ slug }: { slug: string }) {
   const {
@@ -45,6 +46,7 @@ export function AgentDetail({ slug }: { slug: string }) {
     );
   }
 
+  const parked = agent.parkedBlockers ?? [];
   const agentTasks = tasks.filter((t) => t.agentId === agent.id);
   const agentActivity = activity.filter((a) => a.agentName === agent.name);
 
@@ -118,6 +120,27 @@ export function AgentDetail({ slug }: { slug: string }) {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div
+            className={`card p-4 ${offlineDimClass(offlineDim.dimmed)}`}
+            id="parked-blockers"
+          >
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold text-ink-100">
+                Parked blockers
+              </h2>
+              {parked.length > 0 && (
+                <span className="text-xs text-amber-200/80">
+                  {parkedLabel(parked.length)}
+                </span>
+              )}
+            </div>
+            {parked.length === 0 ? (
+              <p className="text-sm text-ink-500">No parked blockers.</p>
+            ) : (
+              <ParkedBlockerList blockers={parked} freshness={freshness} />
+            )}
           </div>
 
           <div className="card p-4">

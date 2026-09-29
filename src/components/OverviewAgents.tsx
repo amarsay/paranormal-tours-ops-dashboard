@@ -10,6 +10,7 @@ import {
 } from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
 import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockersChip } from "./ParkedBlockers";
 
 /** Compact agent cards for Overview — relative time, presence, live dot. */
 export function OverviewAgents() {
@@ -79,14 +80,16 @@ export function OverviewAgents() {
             presence === "failed" ||
             presence === "stale";
           return (
-            <Link
+            // Card is a <div> so the parked-blockers chip (a button) isn't
+            // nested inside the link.
+            <div
               key={agent.id}
-              href={`/agents/${agent.id}`}
               id={`overview-agent-${agent.id}`}
-              className={`card group block p-4 transition hover:border-violet-400/30 ${
+              className={`card group p-4 transition hover:border-violet-400/30 ${
                 attention ? "border-rose-500/20" : ""
               }`}
             >
+              <Link href={`/agents/${agent.id}`} className="block">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -110,7 +113,9 @@ export function OverviewAgents() {
               <p className="mt-2 text-xs text-ink-500">
                 {formatAgentUpdated(agent, freshness)}
               </p>
-            </Link>
+              </Link>
+              <ParkedBlockersChip agent={agent} freshness={freshness} />
+            </div>
           );
         })}
       </div>

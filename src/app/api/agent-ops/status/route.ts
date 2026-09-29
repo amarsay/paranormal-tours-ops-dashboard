@@ -1,15 +1,20 @@
 import { NextResponse } from "next/server";
-import { applyHeartbeat } from "@/lib/apply-heartbeat";
+import {
+  getSnapshotWithBlockers,
+  handleStatusPost,
+} from "@/lib/agent-ops-status";
 import type { AgentOpsHeartbeatBody } from "@/lib/live-types";
-import { getSnapshot } from "@/lib/live-store";
 import { requireWriteToken } from "@/lib/ops-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-/** GET — dashboard poll (no auth). Current-state snapshot only. */
+/**
+ * GET — dashboard poll (no auth). Current-state snapshot only; each row
+ * carries `parkedBlockers` ([] when none).
+ */
 export async function GET() {
-  const snap = await getSnapshot();
+  const snap = await getSnapshotWithBlockers();
   return NextResponse.json(snap, {
     headers: { "Cache-Control": "no-store" },
   });
@@ -18,6 +23,7 @@ export async function GET() {
 /**
  * POST — Spectre / agent heartbeat (Bearer OPS_WRITE_TOKEN).
  * Flo schema: presence, taskState, heartbeatAt, etc.
+ * Optional `parkBlocker` / `clearBlocker` (see src/lib/parked-blockers.ts).
  */
 export async function POST(req: Request) {
   const denied = requireWriteToken(req);
@@ -30,11 +36,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const result = await applyHeartbeat(body);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
-  }
-
-  const snap = await getSnapshot();
-  return NextResponse.json({ ok: true, row: result.row, snapshot: snap });
+  const result = await handleStatusPost(body);
+  return NextResponse.json(result.body, { status: result.status });
 }

@@ -13,6 +13,7 @@ import {
 } from "@/lib/freshness";
 import { AgentStatusChip, LiveDot } from "./StatusChip";
 import { offlineDimClass } from "./offline-dim";
+import { ParkedBlockersChip } from "./ParkedBlockers";
 
 const STATUSES: PresenceStatus[] = ["idle", "working", "blocked", "review", "done", "failed", "stale", "offline"];
 
@@ -87,11 +88,11 @@ export function AgentsGrid() {
         data-offline-dimmed={offlineDim.dimmed || undefined}
       >
         {filtered.map((agent) => (
-          <Link
+          <div
             key={agent.id}
-            href={`/agents/${agent.id}`}
-            className="card group block p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
+            className="card group p-4 transition hover:border-violet-400/30 hover:shadow-[0_0_28px_rgba(139,92,246,0.12)]"
           >
+            <Link href={`/agents/${agent.id}`} className="block">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <div className="flex items-center gap-2">
@@ -113,7 +114,9 @@ export function AgentsGrid() {
             <p className="mt-2 text-xs text-ink-500">
               {formatAgentUpdated(agent, freshness)}
             </p>
-          </Link>
+            </Link>
+            <ParkedBlockersChip agent={agent} freshness={freshness} />
+          </div>
         ))}
       </div>
     </div>

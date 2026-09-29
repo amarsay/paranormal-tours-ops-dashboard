@@ -1,5 +1,6 @@
 import type { Agent, AgentStatus, PresenceStatus } from "@/types";
 import { FRESHNESS } from "./live-types";
+import { formatWaitingDuration } from "./parked-blockers";
 
 function isActiveStatus(status: AgentStatus): boolean {
   return status === "working" || status === "blocked" || status === "review";
@@ -192,4 +193,27 @@ export function isSameLondonDay(iso: string, now = new Date()): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * How long a parked blocker has been waiting, measured against the snapshot
+ * clock (same reference as staleness), not render-time Date.now(). ≥ 0.
+ */
+export function parkedWaitingMs(
+  sinceIso: string,
+  ref?: FreshnessRef,
+  now = Date.now()
+): number {
+  const since = Date.parse(sinceIso);
+  if (!Number.isFinite(since)) return 0;
+  return Math.max(0, snapshotNow(ref, now) - since);
+}
+
+/** "waiting 2d 3h" */
+export function formatParkedWaiting(
+  sinceIso: string,
+  ref?: FreshnessRef,
+  now = Date.now()
+): string {
+  return `waiting ${formatWaitingDuration(parkedWaitingMs(sinceIso, ref, now))}`;
 }
