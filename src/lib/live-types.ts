@@ -31,6 +31,51 @@ export interface AgentOpsRow {
   parkedBlockers?: ParkedBlocker[];
 }
 
+/**
+ * Every stored row field, in the exact key order the 22 Sep production build
+ * wrote (JSON.stringify of buildHeartbeatRow). Used to:
+ *  - restore null-valued fields in the Lua write script — Upstash's cjson
+ *    decodes JSON null as a *missing* key, so a decode → re-encode would
+ *    silently drop them (see status-lua.ts);
+ *  - normalise rows on read, so the GET shape (keys and key order) matches
+ *    the legacy build even if a stored row lost a field.
+ * parkedBlockers is GET-only and never stored, so it is not listed.
+ */
+export const AGENT_ROW_FIELDS = [
+  "agentId",
+  "agentName",
+  "status",
+  "taskTitle",
+  "notes",
+  "correlationId",
+  "handoffTo",
+  "updatedAt",
+  "blockerReason",
+  "taskState",
+  "heartbeatAt",
+  "taskId",
+  "presence",
+  "message",
+] as const;
+
+/**
+ * Stored row → canonical shape: every known field present (missing → null)
+ * in legacy order, then any unknown keys in their stored order. Non-object
+ * values are returned untouched (never throws on odd data).
+ */
+export function normaliseStoredRow(raw: unknown): AgentOpsRow {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw as AgentOpsRow;
+  }
+  const src = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const f of AGENT_ROW_FIELDS) out[f] = src[f] === undefined ? null : src[f];
+  for (const [k, v] of Object.entries(src)) {
+    if (!(k in out)) out[k] = v;
+  }
+  return out as unknown as AgentOpsRow;
+}
+
 export interface AgentOpsSnapshot {
   schemaVersion: number;
   updatedAt: string;

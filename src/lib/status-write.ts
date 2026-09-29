@@ -1,16 +1,16 @@
 import type { ParkedBlocker } from "@/types";
 import type { AgentOpsRow } from "./live-types";
-import { LIVE_SCHEMA_VERSION } from "./live-types";
+import { LIVE_SCHEMA_VERSION, normaliseStoredRow } from "./live-types";
 import {
   LONE_SURROGATE,
-  STATUS_REDIS_KEY,
+  LUA_ROW_FIELDS,
   memoryBucket,
   redisCommand,
   storageMode,
 } from "./live-store";
 import { PARKED_MAX_PER_AGENT, coerceBlocker } from "./parked-blockers";
 import { parkedMemory } from "./parked-store";
-import { STATUS_WRITE_LUA, parkedKey } from "./status-lua";
+import { STATUS_WRITE_LUA, parkedKey, statusRedisKey } from "./status-lua";
 
 export type RowWrite =
   | { mode: "full"; row: AgentOpsRow }
@@ -77,11 +77,20 @@ export async function writeStatus(
             reason: b.blocker.reason,
           }).slice(1)
         : "";
+    // Explicit nulls in a merge patch (e.g. taskTitle: null → clear). cjson
+    // on Upstash drops null keys on decode, so they travel separately.
+    const nullKeys =
+      input.row?.mode === "merge"
+        ? Object.entries(input.row.patch)
+            .filter(([, v]) => v === null)
+            .map(([k]) => k)
+            .join(",")
+        : "";
     const res = (await redisCommand([
       "EVAL",
       STATUS_WRITE_LUA,
       2,
-      STATUS_REDIS_KEY,
+      statusRedisKey(),
       parkedKey(input.agentId),
       input.agentId,
       input.row?.mode ?? "none",
@@ -97,13 +106,15 @@ export async function writeStatus(
       tail,
       since,
       PARKED_MAX_PER_AGENT,
+      LUA_ROW_FIELDS,
+      nullKeys,
     ])) as string[];
     const tag = res?.[0];
     if (tag === "no_live_row" || tag === "blocker_limit") {
       return { ok: false, code: tag };
     }
     if (tag !== "ok") throw new Error(`status write failed: ${String(tag)}`);
-    const row = res[1] ? (JSON.parse(res[1]) as AgentOpsRow) : null;
+    const row = res[1] ? normaliseStoredRow(JSON.parse(res[1])) : null;
     let blocker: BlockerOutcome | undefined;
     if (b?.type === "park") {
       const parsed = coerceBlocker(JSON.parse(res[3]!));
@@ -159,5 +170,5 @@ export async function writeStatus(
     mem.updatedAt = now;
     mem.agents[input.agentId] = row;
   }
-  return { ok: true, row: row ? { ...row } : null, blocker };
+  return { ok: true, row: row ? normaliseStoredRow(row) : null, blocker };
 }

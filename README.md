@@ -24,6 +24,7 @@ Open http://localhost:3000
 | `OPS_WRITE_TOKEN` | Yes for POST | Bearer token for Spectre heartbeats |
 | `UPSTASH_REDIS_REST_URL` | Vercel | Upstash Redis REST URL |
 | `UPSTASH_REDIS_REST_TOKEN` | Vercel | Upstash Redis REST token |
+| `PT_AGENT_OPS_KEY_PREFIX` | No | Redis key prefix for Agent Ops keys (default `pt:agent-ops:` → `pt:agent-ops:status:v1`, `pt:agent-ops:parked:v1:<id>`). Leave unset in production; tests set an isolated prefix such as `pt:agent-ops:test:<runId>:` |
 
 Without Upstash, the API uses an **in-memory Map** (fine for `next dev` / single Node process). On Vercel you **must** set Upstash or heartbeats will not persist across isolates.
 
@@ -222,6 +223,18 @@ won), and a blocker action and its heartbeat fields commit together or not at
 all. No migration: old code can still read (and write) the key, so rollback
 is safe. GET pipelines one `HGETALL` per row. In memory mode every op is
 synchronous in one process.
+
+**Null fields (Upstash).** Upstash's Lua `cjson` decodes JSON `null` as a
+*missing* key and can't encode `null`, so a naive decode → re-encode drops
+every null-valued field. The script therefore writes the blob with its own
+encoder: every known row field (`AGENT_ROW_FIELDS` in `live-types.ts`, in the
+legacy key order) is always written, missing ones as `null`; agents keep their
+stored order. Explicit nulls in a partial update (`"taskTitle": null`) are
+passed to the script separately so they really clear the field. Reads also
+normalise every row to the full legacy key set/order (missing → `null`), so
+`/api/live` has exactly the keys the pre-parked-blockers build returned.
+Local `redis-server` keeps nulls, so test the write path against Upstash (with
+an isolated `PT_AGENT_OPS_KEY_PREFIX`).
 
 **UI.** Cards show an amber “N parked blocker(s)” chip that discloses the list
 (title, reason, “waiting 2d 3h”); **Needs you** has a separate *Parked
