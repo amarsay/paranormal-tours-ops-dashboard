@@ -4,7 +4,12 @@ import {
   LIVE_SCHEMA_VERSION,
   normaliseStoredRow,
 } from "./live-types";
-import { STATUS_WRITE_LUA, parkedKey, statusRedisKey } from "./status-lua";
+import {
+  STATUS_WRITE_LUA,
+  parkedIndexKey,
+  parkedKey,
+  statusRedisKey,
+} from "./status-lua";
 
 export { statusRedisKey };
 
@@ -71,6 +76,26 @@ function redisConfigured(): boolean {
   return Boolean(redisUrl() && redisToken());
 }
 
+/**
+ * The status store (Redis) could not be used. Routes turn this into
+ * 503 { code: "store_unavailable" }. There is deliberately NO fallback to
+ * the in-memory store once Redis is configured: on Vercel every serverless
+ * instance has its own memory, so a fallback silently splits the data
+ * (writes "succeed" into one instance, reads flip between instances and the
+ * frozen Redis copy).
+ */
+export class StoreUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "StoreUnavailableError";
+  }
+}
+
+async function upstashFailure(res: Response, what: string): Promise<StoreUnavailableError> {
+  const text = await res.text().catch(() => "");
+  return new StoreUnavailableError(`${what} ${res.status}: ${text.slice(0, 200)}`);
+}
+
 /** Single Upstash REST command. Throws on HTTP or Redis error. */
 export async function redisCommand(args: unknown[]): Promise<unknown> {
   const url = redisUrl()!;
@@ -84,11 +109,9 @@ export async function redisCommand(args: unknown[]): Promise<unknown> {
     body: JSON.stringify(args),
     cache: "no-store",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Upstash error ${res.status}: ${text.slice(0, 200)}`);
-  }
-  const json = (await res.json()) as { result?: unknown };
+  if (!res.ok) throw await upstashFailure(res, "Upstash error");
+  const json = (await res.json()) as { result?: unknown; error?: string };
+  if (json.error) throw new StoreUnavailableError(`Upstash error: ${json.error.slice(0, 200)}`);
   return json.result;
 }
 
@@ -109,13 +132,12 @@ export async function redisPipeline(commands: unknown[][]): Promise<unknown[]> {
     body: JSON.stringify(commands),
     cache: "no-store",
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Upstash pipeline error ${res.status}: ${text.slice(0, 200)}`);
-  }
+  if (!res.ok) throw await upstashFailure(res, "Upstash pipeline error");
   const json = (await res.json()) as Array<{ result?: unknown; error?: string }>;
   return json.map((item) => {
-    if (item.error) throw new Error(`Upstash pipeline command error: ${item.error}`);
+    if (item.error) {
+      throw new StoreUnavailableError(`Upstash pipeline command error: ${item.error.slice(0, 200)}`);
+    }
     return item.result;
   });
 }
@@ -124,35 +146,25 @@ export async function redisPipeline(commands: unknown[][]): Promise<unknown[]> {
 export const LONE_SURROGATE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
+/**
+ * Which store to use. Redis whenever it is configured (all Vercel envs);
+ * the in-memory store only for local dev/tests without Redis. In production
+ * without Redis this throws (503) instead of silently using per-instance
+ * memory.
+ */
 export function storageMode(): "redis" | "memory" {
-  return redisConfigured() ? "redis" : "memory";
+  if (redisConfigured()) return "redis";
+  if (process.env.VERCEL_ENV === "production") {
+    throw new StoreUnavailableError("No Redis store configured in production");
+  }
+  return "memory";
 }
 
 export async function getSnapshot(): Promise<AgentOpsSnapshot> {
-  const storage = storageMode();
-  if (storage === "redis") {
-    try {
-      const raw = await redisCommand(["GET", statusRedisKey()]);
-      if (typeof raw === "string" && raw) {
-        const parsed = JSON.parse(raw) as Omit<AgentOpsSnapshot, "storage">;
-        return {
-          schemaVersion: parsed.schemaVersion ?? LIVE_SCHEMA_VERSION,
-          updatedAt: parsed.updatedAt ?? new Date().toISOString(),
-          agents: normaliseAgents(parsed.agents),
-          storage: "redis",
-        };
-      }
-      return {
-        schemaVersion: LIVE_SCHEMA_VERSION,
-        updatedAt: new Date().toISOString(),
-        agents: {},
-        storage: "redis",
-      };
-    } catch (err) {
-      console.error("[agent-ops] redis get failed, falling back to memory", err);
-    }
+  if (storageMode() === "redis") {
+    // Errors propagate (→ 503); never a memory fallback.
+    return snapshotFromRaw(await redisCommand(["GET", statusRedisKey()]));
   }
-
   const mem = getMemory();
   return {
     schemaVersion: LIVE_SCHEMA_VERSION,
@@ -162,48 +174,71 @@ export async function getSnapshot(): Promise<AgentOpsSnapshot> {
   };
 }
 
+/** Stored JSON string (or null) → snapshot. Corrupt JSON → store error. */
+export function snapshotFromRaw(raw: unknown): AgentOpsSnapshot {
+  if (typeof raw === "string" && raw) {
+    let parsed: Omit<AgentOpsSnapshot, "storage">;
+    try {
+      parsed = JSON.parse(raw) as Omit<AgentOpsSnapshot, "storage">;
+    } catch (err) {
+      throw new StoreUnavailableError("Stored status JSON is corrupt", { cause: err });
+    }
+    return {
+      schemaVersion: parsed.schemaVersion ?? LIVE_SCHEMA_VERSION,
+      updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+      agents: normaliseAgents(parsed.agents),
+      storage: "redis",
+    };
+  }
+  return {
+    schemaVersion: LIVE_SCHEMA_VERSION,
+    updatedAt: new Date().toISOString(),
+    agents: {},
+    storage: "redis",
+  };
+}
+
 /**
  * Full-row replace for one agent (plain heartbeat).
  *
  * Redis: a single atomic EVAL (STATUS_WRITE_LUA, rowMode "full") that updates
  * only this agent inside the existing JSON key. The old GET-then-SET lost rows
- * when heartbeats for different agents raced (the last SET won). On a Redis
- * error it still falls back to memory, as before.
+ * when heartbeats for different agents raced (the last SET won). A Redis
+ * error throws StoreUnavailableError (→ 503); there is no memory fallback.
  */
 export async function upsertAgentRow(row: AgentOpsRow): Promise<void> {
   const storage = storageMode();
   const now = new Date().toISOString();
 
   if (storage === "redis") {
-    try {
-      const res = (await redisCommand([
-        "EVAL",
-        STATUS_WRITE_LUA,
-        2,
-        statusRedisKey(),
-        parkedKey(row.agentId),
-        row.agentId,
-        "full",
-        JSON.stringify(row, (_k, v) =>
-          typeof v === "string" ? v.replace(LONE_SURROGATE, "\uFFFD") : v
-        ),
-        "",
-        now,
-        LIVE_SCHEMA_VERSION,
-        "0",
-        "none",
-        "",
-        "",
-        "",
-        0,
-        LUA_ROW_FIELDS,
-        "",
-      ])) as string[];
-      if (res?.[0] !== "ok") throw new Error(`status write failed: ${String(res?.[0])}`);
-      return;
-    } catch (err) {
-      console.error("[agent-ops] redis set failed, using memory", err);
+    const res = (await redisCommand([
+      "EVAL",
+      STATUS_WRITE_LUA,
+      3,
+      statusRedisKey(),
+      parkedKey(row.agentId),
+      parkedIndexKey(),
+      row.agentId,
+      "full",
+      JSON.stringify(row, (_k, v) =>
+        typeof v === "string" ? v.replace(LONE_SURROGATE, "\uFFFD") : v
+      ),
+      "",
+      now,
+      LIVE_SCHEMA_VERSION,
+      "0",
+      "none",
+      "",
+      "",
+      "",
+      0,
+      LUA_ROW_FIELDS,
+      "",
+    ])) as string[];
+    if (res?.[0] !== "ok") {
+      throw new StoreUnavailableError(`status write failed: ${String(res?.[0])}`);
     }
+    return;
   }
 
   const mem = getMemory();
@@ -224,12 +259,9 @@ export async function replaceAgents(
   };
 
   if (storage === "redis") {
-    try {
-      await redisCommand(["SET", statusRedisKey(), JSON.stringify(next)]);
-      return { ...next, storage: "redis" };
-    } catch (err) {
-      console.error("[agent-ops] redis replace failed, using memory", err);
-    }
+    // Errors propagate (→ 503); never a memory fallback.
+    await redisCommand(["SET", statusRedisKey(), JSON.stringify(next)]);
+    return { ...next, storage: "redis" };
   }
 
   const mem = getMemory();

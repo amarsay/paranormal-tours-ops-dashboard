@@ -24,6 +24,17 @@ export function parkedKeyPrefix(): string {
   return `${keyPrefix()}parked:v1:`;
 }
 
+/**
+ * Set of agentIds that currently have parked blockers (prod:
+ * pt:agent-ops:parked-index:v1). Maintained by STATUS_WRITE_LUA on park /
+ * clear so a status GET costs 2 Redis commands (GET + SMEMBERS) instead of
+ * one HGETALL per agent. Upstash bills every command (each pipeline entry
+ * and each redis.call inside a script), and the free plan allows 500k/month.
+ */
+export function parkedIndexKey(): string {
+  return `${keyPrefix()}parked-index:v1`;
+}
+
 export function parkedKey(agentId: string): string {
   return `${parkedKeyPrefix()}${agentId}`;
 }
@@ -58,6 +69,9 @@ export function parkedKey(agentId: string): string {
  * 10 blocker JSON tail (no opening brace, no since) · 11 candidate since ·
  * 12 per-agent cap · 13 known row fields, comma-separated, in output order ·
  * 14 fields the merge patch sets to null, comma-separated ("" = none).
+ *
+ * KEYS[3] is the parked index set (parkedIndexKey()): SADD on park, SREM on
+ * clear once the agent's hash is empty.
  *
  * Returns {"ok", rowJson|"", blockerStatus, blockerValue} or {errorCode}:
  * no_live_row · blocker_limit · corrupt_status · bad_payload.
@@ -143,8 +157,13 @@ if op == 'park' then
   bval = '{"since":"' .. since .. '",' .. btail
   redis.call('HSET', KEYS[2], bid, bval)
   if cur then bstatus = '2' else bstatus = '1' end
+  if KEYS[3] and not cur then redis.call('SADD', KEYS[3], agentId) end
 elseif op == 'clear' then
-  bstatus = tostring(redis.call('HDEL', KEYS[2], bid))
+  local removed = redis.call('HDEL', KEYS[2], bid)
+  bstatus = tostring(removed)
+  if KEYS[3] and removed > 0 and redis.call('EXISTS', KEYS[2]) == 0 then
+    redis.call('SREM', KEYS[3], agentId)
+  end
 end
 
 local row = existing

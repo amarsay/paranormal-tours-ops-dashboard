@@ -5,6 +5,7 @@ import {
 } from "@/lib/agent-ops-status";
 import type { AgentOpsHeartbeatBody } from "@/lib/live-types";
 import { readJsonObjectBody, requireWriteToken } from "@/lib/ops-auth";
+import { withStore } from "@/lib/store-response";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,9 +15,11 @@ export const runtime = "nodejs";
  * carries `parkedBlockers` ([] when none).
  */
 export async function GET() {
-  const snap = await getSnapshotWithBlockers();
-  return NextResponse.json(snap, {
-    headers: { "Cache-Control": "no-store" },
+  return withStore("status GET", async () => {
+    const snap = await getSnapshotWithBlockers();
+    return NextResponse.json(snap, {
+      headers: { "Cache-Control": "no-store" },
+    });
   });
 }
 
@@ -33,6 +36,8 @@ export async function POST(req: Request) {
   const parsed = await readJsonObjectBody(req);
   if (!parsed.ok) return parsed.response;
 
-  const result = await handleStatusPost(parsed.body as AgentOpsHeartbeatBody);
-  return NextResponse.json(result.body, { status: result.status });
+  return withStore("status POST", async () => {
+    const result = await handleStatusPost(parsed.body as AgentOpsHeartbeatBody);
+    return NextResponse.json(result.body, { status: result.status });
+  });
 }
