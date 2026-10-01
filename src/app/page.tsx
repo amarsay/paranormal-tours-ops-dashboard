@@ -2,6 +2,7 @@ import { AttentionStrip } from "@/components/AttentionStrip";
 import { KpiStrip } from "@/components/KpiStrip";
 import { OverviewAgents } from "@/components/OverviewAgents";
 import { ResetDemoButton } from "@/components/ResetDemoButton";
+import { LiveDataGate } from "@/components/LiveDataGate";
 
 export default function OverviewPage() {
   return (
@@ -22,9 +23,11 @@ export default function OverviewPage() {
         <ResetDemoButton />
       </div>
 
-      <KpiStrip />
-      <AttentionStrip />
-      <OverviewAgents />
+      <LiveDataGate>
+        <KpiStrip />
+        <AttentionStrip />
+        <OverviewAgents />
+      </LiveDataGate>
     </div>
   );
 }

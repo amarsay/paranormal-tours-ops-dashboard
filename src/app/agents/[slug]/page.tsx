@@ -1,4 +1,5 @@
 import { AgentDetail } from "@/components/AgentDetail";
+import { LiveDataGate } from "@/components/LiveDataGate";
 import { loadRoster } from "@/lib/roster";
 import { toSlug } from "@/lib/slug";
 
@@ -12,5 +13,9 @@ export default function AgentDetailPage({
 }: {
   params: { slug: string };
 }) {
-  return <AgentDetail slug={params.slug} />;
+  return (
+    <LiveDataGate>
+      <AgentDetail slug={params.slug} />
+    </LiveDataGate>
+  );
 }
