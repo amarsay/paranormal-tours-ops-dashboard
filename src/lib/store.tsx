@@ -19,13 +19,8 @@ import type {
   Task,
   TaskStatus,
 } from "@/types";
-import {
-  STORAGE_KEY,
-  applySeedTaskStatuses,
-  seedAgents,
-  seedCodex,
-  seedDemoTasks,
-} from "./seed";
+import { STORAGE_KEY, seedCodex } from "./seed";
+import { demoDataAllowed, initialData, showNoLiveData } from "./demo-policy";
 import type { AgentOpsSnapshot } from "./live-types";
 import { normaliseTaskState } from "./live-types";
 import type { FreshnessRef } from "./freshness";
@@ -64,6 +59,12 @@ interface OpsContextValue extends OpsState {
    * sync is OFFLINE_DIM_AFTER_MS old; `dataFrom` = "Showing data from HH:MM".
    */
   offlineDim: { dimmed: boolean; dataFrom: string | null };
+  /** Built-in demo data allowed (dev / previews; never production builds). */
+  demoData: boolean;
+  /** A snapshot with rows has loaded in this tab (stays true after failures). */
+  liveDataLoaded: boolean;
+  /** Production with no live data yet → show the "No live data yet" state. */
+  noLiveData: boolean;
 }
 
 const DEFAULT_LIVE: LiveSyncState = DEFAULT_LIVE_SYNC;
@@ -92,26 +93,11 @@ function pushActivity(
   ].slice(0, 80);
 }
 
+const DEMO = demoDataAllowed();
+
 function buildInitial(roster: RosterSeed): Omit<OpsState, "hydrated"> {
-  const baseAgents = seedAgents(roster);
-  const tasks = seedDemoTasks(baseAgents);
-  const agents = applySeedTaskStatuses(baseAgents, tasks);
-  const activity: ActivityItem[] = [
-    {
-      id: "act-seed-1",
-      message: "Dashboard seeded with 31 specialist agents.",
-      at: new Date().toISOString(),
-    },
-    {
-      id: "act-seed-2",
-      message: "Demo board cards loaded for Verity, Atlas, Sally and Billy.",
-      at: new Date().toISOString(),
-    },
-  ];
   return {
-    agents,
-    tasks,
-    activity,
+    ...initialData(roster, DEMO),
     codex: seedCodex(),
     liveSync: { ...DEFAULT_LIVE },
   };
@@ -134,7 +120,14 @@ export function OpsProvider({
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Omit<OpsState, "hydrated">;
-        if (parsed.agents?.length === 31) {
+        if (!DEMO) {
+          // Production: persisted agents/tasks may be old demo data — only
+          // live snapshots may fill them. Codex review state is kept.
+          if (Array.isArray(parsed.codex)) {
+            setState((s) => ({ ...s, codex: parsed.codex, hydrated: true }));
+            return;
+          }
+        } else if (parsed.agents?.length === 31) {
           setState({
             ...parsed,
             liveSync: { ...DEFAULT_LIVE },
@@ -160,8 +153,11 @@ export function OpsProvider({
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
   }, [state.hydrated, state.agents, state.tasks, state.activity, state.codex]);
 
+  const [liveDataLoaded, setLiveDataLoaded] = useState(false);
+
   const applyLiveSnapshot = useCallback(
     (snap: AgentOpsSnapshot, meta?: SnapshotMeta) => {
+      if (Object.keys(snap.agents || {}).length > 0) setLiveDataLoaded(true);
       const receivedAt = meta?.receivedAt ?? Date.now();
       const success: LiveSyncEvent = {
         type: "poll-success",
@@ -554,7 +550,12 @@ export function OpsProvider({
 
   const resetDemo = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
-    setState({ ...buildInitial(roster), hydrated: true });
+    setState((prev) => ({
+      ...buildInitial(roster),
+      // Production has no demo data to reset to: keep the live view.
+      ...(DEMO ? {} : { agents: prev.agents, liveSync: prev.liveSync }),
+      hydrated: true,
+    }));
   }, [roster]);
 
   const { snapshotAt, receivedAt, suppressStale } = state.liveSync;
@@ -600,6 +601,9 @@ export function OpsProvider({
       ...state,
       freshness,
       offlineDim,
+      demoData: DEMO,
+      liveDataLoaded,
+      noLiveData: showNoLiveData(DEMO, liveDataLoaded),
       assignTask,
       updateTaskStatus,
       setAgentStatus,
@@ -613,6 +617,7 @@ export function OpsProvider({
       state,
       freshness,
       offlineDim,
+      liveDataLoaded,
       assignTask,
       updateTaskStatus,
       setAgentStatus,

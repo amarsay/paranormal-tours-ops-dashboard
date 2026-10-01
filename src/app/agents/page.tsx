@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { AgentsGrid } from "@/components/AgentsGrid";
+import { LiveDataGate } from "@/components/LiveDataGate";
 
 export default function AgentsPage() {
   return (
@@ -18,7 +19,9 @@ export default function AgentsPage() {
           <div className="card p-6 text-sm text-ink-400">Loading agents…</div>
         }
       >
-        <AgentsGrid />
+        <LiveDataGate>
+          <AgentsGrid />
+        </LiveDataGate>
       </Suspense>
     </div>
   );
